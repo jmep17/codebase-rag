@@ -12,6 +12,7 @@ from .index import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL,
     collection_name_for,
+    read_notes,
     reindex_file,
 )
 from .tools import TOOL_SCHEMAS, run_tool
@@ -53,17 +54,38 @@ def retrieve(collection, query: str, top_k: int = TOP_K) -> list[dict]:
                 "start_line": meta["start_line"],
                 "end_line": meta["end_line"],
                 "content": doc,
+                "kind": meta.get("kind") or "project",
+                "label": meta.get("label") or "",
             }
         )
     return chunks
 
 
 def format_context(chunks: list[dict]) -> str:
-    parts = []
+    """Group chunks by kind (project / reference label) and render with section headers."""
+    project_chunks = []
+    references: dict[str, list[dict]] = {}
     for c in chunks:
-        header = f"### {c['path']}:{c['start_line']}-{c['end_line']}"
-        parts.append(f"{header}\n```\n{c['content']}\n```")
-    return "\n\n".join(parts)
+        kind = c.get("kind") or "project"
+        if kind == "reference":
+            references.setdefault(c.get("label") or "reference", []).append(c)
+        else:
+            project_chunks.append(c)
+
+    sections: list[str] = []
+    if project_chunks:
+        body = "\n\n".join(
+            f"### {c['path']}:{c['start_line']}-{c['end_line']}\n```\n{c['content']}\n```"
+            for c in project_chunks
+        )
+        sections.append(f"## Project code\n\n{body}")
+    for label in sorted(references):
+        body = "\n\n".join(
+            f"### {c['path']}:{c['start_line']}-{c['end_line']}\n```\n{c['content']}\n```"
+            for c in references[label]
+        )
+        sections.append(f"## Reference: {label}\n\n{body}")
+    return "\n\n".join(sections)
 
 
 def _assistant_msg_from_response(msg) -> dict:
@@ -81,6 +103,18 @@ def _assistant_msg_from_response(msg) -> dict:
             for tc in tool_calls
         ]
     return out
+
+
+def _system_prompt_for(root: Path) -> str:
+    """SYSTEM_PROMPT plus any project notes from the meta dir."""
+    notes = read_notes(root).strip()
+    if not notes:
+        return SYSTEM_PROMPT
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"## Project-specific notes (set by the user via `codebase-rag notes`)\n\n"
+        f"{notes}\n"
+    )
 
 
 def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None:
@@ -101,10 +135,12 @@ def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None
         except Exception as e:
             print(f"  (reindex failed for {rel_path}: {e})")
 
-    history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system_prompt = _system_prompt_for(root)
+    history: list[dict] = [{"role": "system", "content": system_prompt}]
+    notes_marker = "with notes" if read_notes(root).strip() else "no notes"
     print(
         f"Chatting with {CHAT_MODEL}.\n"
-        f"Project: {root}  (collection: {name})\n"
+        f"Project: {root}  (collection: {name}, {notes_marker})\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history."
     )
 
@@ -119,7 +155,7 @@ def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None
         if user_input in (":q", "exit", "quit"):
             return
         if user_input == ":reset":
-            history = [{"role": "system", "content": SYSTEM_PROMPT}]
+            history = [{"role": "system", "content": _system_prompt_for(root)}]
             print("(history cleared)")
             continue
 

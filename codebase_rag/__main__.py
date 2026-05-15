@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -109,6 +111,68 @@ def main() -> None:
         help="Project root whose index to query (default: current working directory).",
     )
 
+    p_notes = subparsers.add_parser(
+        "notes",
+        help="View or edit per-project notes (stored outside the repo; auto-injected into chat).",
+    )
+    p_notes.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root these notes belong to (default: current working directory).",
+    )
+    notes_group = p_notes.add_mutually_exclusive_group()
+    notes_group.add_argument("--edit", action="store_true", help="Open notes in $EDITOR (default vi).")
+    notes_group.add_argument(
+        "--set", dest="set_text", type=str, metavar="TEXT",
+        help="Replace notes with this text. Use '-' to read from stdin.",
+    )
+    notes_group.add_argument(
+        "--append", dest="append_text", type=str, metavar="TEXT",
+        help="Append a line of text to notes. Use '-' to read from stdin.",
+    )
+    notes_group.add_argument("--clear", action="store_true", help="Delete the notes file.")
+
+    p_addref = subparsers.add_parser(
+        "add-reference",
+        help="Index an external directory as reference material for a project.",
+    )
+    p_addref.add_argument("source", type=Path, help="Directory of reference docs to index.")
+    p_addref.add_argument(
+        "--label",
+        type=str,
+        default=None,
+        help="Label for this reference set (default: basename of the source directory).",
+    )
+    p_addref.add_argument(
+        "--for-project",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root these references belong to (default: current working directory).",
+    )
+    p_addref.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_addref.add_argument(
+        "--exclude", "-x", action="append", default=[], metavar="GLOB",
+        help="Glob pattern to exclude inside the reference source. Repeatable.",
+    )
+
+    p_rmref = subparsers.add_parser(
+        "remove-reference",
+        help="Remove a labeled reference set from a project.",
+    )
+    p_rmref.add_argument("label", type=str, help="Label of the reference set to remove.")
+    p_rmref.add_argument(
+        "--for-project",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root the references belong to (default: current working directory).",
+    )
+    p_rmref.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+
     p_chat = subparsers.add_parser("chat", help="Start an interactive chat session.")
     p_chat.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
@@ -157,6 +221,28 @@ def main() -> None:
             print(f"Root does not exist: {args.root}", file=sys.stderr)
             sys.exit(1)
         index_mod.show_file(args.db, args.file, root=args.root.resolve())
+    elif args.command == "notes":
+        _handle_notes(args)
+    elif args.command == "add-reference":
+        if not args.source.exists():
+            print(f"Reference source does not exist: {args.source}", file=sys.stderr)
+            sys.exit(1)
+        if not args.for_project.exists():
+            print(f"Project root does not exist: {args.for_project}", file=sys.stderr)
+            sys.exit(1)
+        label = args.label or args.source.resolve().name
+        index_mod.add_reference(
+            args.source.resolve(),
+            args.for_project.resolve(),
+            args.db,
+            label=label,
+            extra_excludes=args.exclude,
+        )
+    elif args.command == "remove-reference":
+        if not args.for_project.exists():
+            print(f"Project root does not exist: {args.for_project}", file=sys.stderr)
+            sys.exit(1)
+        index_mod.remove_reference(args.db, args.for_project.resolve(), args.label)
     elif args.command == "chat":
         if not args.db.exists():
             print(
@@ -170,6 +256,55 @@ def main() -> None:
         chat_mod.agent_loop(
             args.db, root=args.root.resolve(), show_context=args.show_context
         )
+
+
+def _handle_notes(args: argparse.Namespace) -> None:
+    if not args.root.exists():
+        print(f"Project root does not exist: {args.root}", file=sys.stderr)
+        sys.exit(1)
+    root = args.root.resolve()
+
+    if args.clear:
+        if index_mod.clear_notes(root):
+            print(f"Cleared notes for {root}.")
+        else:
+            print(f"No notes to clear for {root}.")
+        return
+
+    if args.set_text is not None:
+        text = sys.stdin.read() if args.set_text == "-" else args.set_text
+        path = index_mod.write_notes(root, text)
+        print(f"Notes saved to {path}.")
+        return
+
+    if args.append_text is not None:
+        addition = sys.stdin.read() if args.append_text == "-" else args.append_text
+        existing = index_mod.read_notes(root)
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+        path = index_mod.write_notes(root, existing + addition.rstrip("\n") + "\n")
+        print(f"Appended to {path}.")
+        return
+
+    if args.edit:
+        notes_path = index_mod.project_meta_dir(root) / "notes.md"
+        notes_path.parent.mkdir(parents=True, exist_ok=True)
+        notes_path.touch(exist_ok=True)
+        editor = os.environ.get("EDITOR", "vi")
+        try:
+            subprocess.run([editor, str(notes_path)], check=False)
+            print(f"Notes file: {notes_path}")
+        except FileNotFoundError:
+            print(f"Could not launch '{editor}'. Notes file is at: {notes_path}")
+        return
+
+    # Default: print existing notes
+    existing = index_mod.read_notes(root)
+    if not existing:
+        print(f"(no notes for {root})")
+        print(f"File would be: {index_mod.project_meta_dir(root) / 'notes.md'}")
+        return
+    print(existing.rstrip("\n"))
 
 
 if __name__ == "__main__":

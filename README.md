@@ -120,6 +120,49 @@ codebase-rag chat
 
 Each indexed project lives in its own ChromaDB collection, keyed by the absolute path you indexed. `chat` (and `search`/`show`) defaults the scope to the current working directory — `cd ~/code/project-a && codebase-rag chat` only retrieves chunks from project-a, never from any other project you've indexed. Use `--root <path>` to talk to a different project's index from somewhere else.
 
+### Project notes & reference docs
+
+Two extra sources of context, both stored **outside the repo** so nothing extra ends up in your project:
+
+**Project notes** — short-form context the model sees in every turn (stack, conventions, constraints, current focus). Auto-injected into the chat system prompt.
+
+```bash
+cd ~/code/my-project
+codebase-rag notes --edit                            # opens $EDITOR (default vi)
+codebase-rag notes --set "React + Vite app, Postgres, follow snake_case in DB."
+codebase-rag notes --append "Avoid touching legacy/v1/ unless asked."
+codebase-rag notes                                   # print current notes
+codebase-rag notes --clear                           # delete
+```
+
+Notes live at `~/.codebase-rag/meta/<hash>/notes.md`, keyed by the absolute project path.
+
+**Reference docs** — external documents indexed alongside the project for retrieval. Each reference set has a label, so the model sees project chunks and reference chunks separately in context.
+
+```bash
+cd ~/code/my-project
+codebase-rag add-reference ~/Documents/api-docs --label api-spec
+codebase-rag add-reference ~/Documents/dnd-kit-docs --label dnd-kit
+codebase-rag remove-reference api-spec               # drop a reference set
+
+# inspect what's loaded for this project
+codebase-rag stats --root .
+```
+
+References are stored in the project's ChromaDB collection but tagged `kind=reference` with a label. During chat, retrieval pulls from both project code and reference docs; the model sees them in separate blocks:
+
+```
+## Project code
+### src/auth.py:42-67
+...
+
+## Reference: api-spec
+### oauth-flow.md:1-40
+...
+```
+
+`codebase-rag reindex <project>` wipes only the project's chunks — your reference sets stay attached.
+
 The model has three tools: `read_file`, `write_file`, `edit_file`. It will use them automatically when you ask for changes ("add a test for…", "rename X to Y", "extract this into a helper"). Edits are confined to `--root` (defaults to the current working directory).
 
 After every successful write or edit, the affected file is automatically re-chunked and the index is updated — no manual `reindex` needed for edits the agent makes.

@@ -15,12 +15,16 @@ from chromadb.config import Settings
 CHROMA_SETTINGS = Settings(anonymized_telemetry=False)
 
 EMBEDDING_MODEL = "nomic-embed-text"
+META_ROOT = Path.home() / ".codebase-rag" / "meta"
+
+
+def _root_digest(root: Path) -> str:
+    return hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:12]
 
 
 def collection_name_for(root: Path) -> str:
     """Stable per-project collection name derived from the absolute root path."""
-    abs_root = str(root.resolve())
-    digest = hashlib.sha1(abs_root.encode("utf-8")).hexdigest()[:12]
+    digest = _root_digest(root)
     last_parts = [p for p in root.resolve().parts[-2:] if p and p != "/"]
     slug = "_".join(re.sub(r"[^A-Za-z0-9]+", "_", p) for p in last_parts)
     slug = re.sub(r"_+", "_", slug).strip("_") or "root"
@@ -28,11 +32,42 @@ def collection_name_for(root: Path) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", name)[:512]
 
 
+def project_meta_dir(root: Path) -> Path:
+    """Path to the per-project metadata directory (notes, etc.), outside any repo."""
+    return META_ROOT / _root_digest(root)
+
+
 def _open_collection(client, root: Path):
     return client.get_or_create_collection(
         collection_name_for(root),
         metadata={"root": str(root.resolve())},
     )
+
+
+def read_notes(root: Path) -> str:
+    notes_path = project_meta_dir(root) / "notes.md"
+    if not notes_path.is_file():
+        return ""
+    return notes_path.read_text(encoding="utf-8", errors="replace")
+
+
+def write_notes(root: Path, content: str) -> Path:
+    meta_dir = project_meta_dir(root)
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "info.json").write_text(
+        f'{{"root": "{str(root.resolve())}"}}\n', encoding="utf-8"
+    )
+    notes_path = meta_dir / "notes.md"
+    notes_path.write_text(content, encoding="utf-8")
+    return notes_path
+
+
+def clear_notes(root: Path) -> bool:
+    notes_path = project_meta_dir(root) / "notes.md"
+    if notes_path.is_file():
+        notes_path.unlink()
+        return True
+    return False
 
 EXCLUDE_DIRS = {
     ".git", ".svn", ".hg",
@@ -196,29 +231,89 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def reset_index(db_path: Path, root: Path) -> None:
+    """Wipe only project chunks (kind=project) — references are preserved."""
     if not db_path.exists():
         return
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     name = collection_name_for(root)
     try:
-        client.delete_collection(name)
-        print(f"Wiped collection '{name}' for {root.resolve()}.")
+        collection = client.get_collection(name)
+    except Exception:
+        return
+    # Delete project chunks. Also nuke legacy chunks that have no 'kind' metadata
+    # (from before this feature) so old/new data don't sit side-by-side.
+    try:
+        collection.delete(where={"kind": "project"})
     except Exception:
         pass
+    try:
+        all_result = collection.get(include=["metadatas"])
+        ids = result_get_ids(all_result)
+        metas = all_result.get("metadatas") or []
+        legacy_ids = [
+            cid for cid, m in zip(ids, metas) if cid and not (m and m.get("kind"))
+        ]
+        if legacy_ids:
+            collection.delete(ids=legacy_ids)
+    except Exception:
+        pass
+    print(f"Wiped project chunks for {root.resolve()} (references preserved).")
 
 
-def _collection_summary(collection) -> tuple[int, int, list[tuple[str, int]]]:
+def remove_reference(db_path: Path, project_root: Path, label: str) -> None:
+    if not db_path.exists():
+        return
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    try:
+        collection = client.get_collection(collection_name_for(project_root))
+    except Exception:
+        print(f"No index for {project_root.resolve()}.")
+        return
+    try:
+        before = collection.count()
+        collection.delete(where={"kind": "reference", "label": label})
+        after = collection.count()
+        print(f"Removed reference '{label}' ({before - after} chunks).")
+    except Exception as e:
+        print(f"Could not remove reference '{label}': {e}")
+
+
+def result_get_ids(result: dict) -> list[str]:
+    """ChromaDB get() returns ids by default; collection.get's dict has 'ids'."""
+    return list(result.get("ids") or [])
+
+
+def _collection_summary(collection) -> dict:
     total = collection.count()
     result = collection.get(include=["metadatas"])
     metas = result.get("metadatas") or []
-    files: dict[str, int] = {}
+    project_files: dict[str, int] = {}
+    references: dict[str, dict[str, int]] = {}  # label -> {path -> chunk_count}
+    project_chunks = 0
+    legacy_chunks = 0
     for meta in metas:
         if not meta:
             continue
         path = meta.get("path", "?")
-        files[path] = files.get(path, 0) + 1
-    top = sorted(files.items(), key=lambda kv: -kv[1])[:15]
-    return total, len(files), top
+        kind = meta.get("kind")
+        if kind == "reference":
+            label = meta.get("label", "reference")
+            references.setdefault(label, {})[path] = references.setdefault(label, {}).get(path, 0) + 1
+        elif kind == "project":
+            project_chunks += 1
+            project_files[path] = project_files.get(path, 0) + 1
+        else:
+            legacy_chunks += 1
+            project_files[path] = project_files.get(path, 0) + 1
+    top_project = sorted(project_files.items(), key=lambda kv: -kv[1])[:15]
+    return {
+        "total": total,
+        "project_chunks": project_chunks + legacy_chunks,
+        "project_files": len(project_files),
+        "legacy_chunks": legacy_chunks,
+        "references": references,
+        "top_project_files": top_project,
+    }
 
 
 def stats(db_path: Path, root: Path | None = None) -> None:
@@ -239,13 +334,24 @@ def stats(db_path: Path, root: Path | None = None) -> None:
         except Exception:
             print(f"No index for {root.resolve()}. Run `codebase-rag index .` first.")
             return
-        total, file_count, top = _collection_summary(collection)
+        summary = _collection_summary(collection)
+        notes = read_notes(root)
         print(f"Project: {root.resolve()}")
-        print(f"Chunks:  {total}")
-        print(f"Files:   {file_count}")
-        if top:
-            print("\nLargest files by chunk count:")
-            for path, n in top:
+        print(f"Chunks:  {summary['total']}")
+        print(f"  project:  {summary['project_chunks']}  ({summary['project_files']} files)")
+        if summary["legacy_chunks"]:
+            print(f"    (legacy chunks without kind metadata: {summary['legacy_chunks']})")
+        for label, files in summary["references"].items():
+            ref_count = sum(files.values())
+            print(f"  reference '{label}':  {ref_count}  ({len(files)} files)")
+        print(f"Notes:   {'present' if notes else '(none)'}")
+        if notes:
+            first_line = notes.strip().splitlines()[0] if notes.strip() else ""
+            if first_line:
+                print(f"  > {first_line[:80]}")
+        if summary["top_project_files"]:
+            print("\nLargest project files by chunk count:")
+            for path, n in summary["top_project_files"]:
                 print(f"  {n:5d}  {path}")
         return
 
@@ -265,9 +371,24 @@ def stats(db_path: Path, root: Path | None = None) -> None:
 
     for collection in indexed:
         meta_root = (collection.metadata or {}).get("root", "(unknown root)")
-        total, file_count, _ = _collection_summary(collection)
+        summary = _collection_summary(collection)
+        ref_summary = ""
+        if summary["references"]:
+            ref_summary = "  refs: " + ", ".join(
+                f"{label}({sum(files.values())})"
+                for label, files in summary["references"].items()
+            )
+        notes_marker = ""
+        try:
+            if (Path(meta_root) / "_").parent and read_notes(Path(meta_root)):
+                notes_marker = "  notes: yes"
+        except Exception:
+            pass
         print(f"  {meta_root}")
-        print(f"    chunks: {total}, files: {file_count}, collection: {collection.name}")
+        print(
+            f"    project chunks: {summary['project_chunks']} ({summary['project_files']} files)"
+            f"{ref_summary}{notes_marker}"
+        )
 
 
 def search(
@@ -365,13 +486,21 @@ def show_file(db_path: Path, file_pattern: str, root: Path) -> None:
         print()
 
 
+def _chunk_id(kind: str, label: str, rel: str, start: int, end: int) -> str:
+    if kind == "reference":
+        return f"ref:{label}::{rel}:{start}-{end}"
+    return f"proj::{rel}:{start}-{end}"
+
+
 def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
-    """Drop existing chunks for `rel_path` and re-chunk/embed the current file."""
+    """Drop existing project chunks for `rel_path` and re-chunk/embed the current file."""
     root = root.resolve()
     abs_path = root / rel_path
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     collection = _open_collection(client, root)
-    collection.delete(where={"path": rel_path})
+    # Only delete project chunks for this path -- preserves any reference that
+    # might happen to share a path string under a different label.
+    collection.delete(where={"$and": [{"path": rel_path}, {"kind": "project"}]})
     if not abs_path.exists() or not abs_path.is_file():
         return
     chunks = list(chunk_file(abs_path, root))
@@ -383,7 +512,7 @@ def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
         current_mtime = 0.0
     embeddings = embed_texts([c["content"] for c in chunks])
     collection.upsert(
-        ids=[c["id"] for c in chunks],
+        ids=[_chunk_id("project", "", c["path"], c["start_line"], c["end_line"]) for c in chunks],
         embeddings=embeddings,
         documents=[c["content"] for c in chunks],
         metadatas=[
@@ -392,16 +521,21 @@ def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
                 "mtime": current_mtime,
+                "kind": "project",
+                "label": "",
             }
             for c in chunks
         ],
     )
 
 
-def _load_indexed_mtimes(collection) -> dict[str, float]:
-    """Return {relative_path: mtime} for files already in the collection."""
+def _load_indexed_mtimes(collection, kind: str = "project", label: str = "") -> dict[str, float]:
+    """Return {relative_path: mtime} for chunks matching the kind/label."""
+    where: dict = {"kind": kind}
+    if kind == "reference":
+        where = {"$and": [{"kind": "reference"}, {"label": label}]}
     try:
-        result = collection.get(include=["metadatas"])
+        result = collection.get(where=where, include=["metadatas"])
     except Exception:
         return {}
     out: dict[str, float] = {}
@@ -415,22 +549,31 @@ def _load_indexed_mtimes(collection) -> dict[str, float]:
     return out
 
 
-def build_index(
-    root: Path,
+def _ingest(
+    source: Path,
+    project_root: Path,
     db_path: Path,
     *,
+    kind: str,
+    label: str,
     extra_excludes: Sequence[str] = (),
 ) -> None:
-    root = root.resolve()
+    source = source.resolve()
+    project_root = project_root.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
-    collection = _open_collection(client, root)
-    print(f"Project: {root}  (collection: {collection.name})")
+    collection = _open_collection(client, project_root)
 
-    indexed_mtimes = _load_indexed_mtimes(collection)
-    user_excludes = tuple(extra_excludes) + tuple(_load_ignore_file(root))
-    nested_repos = _find_nested_repos(root)
+    if kind == "reference":
+        print(f"Reference '{label}' from {source} -> project {project_root}")
+        print(f"  (collection: {collection.name})")
+    else:
+        print(f"Project: {project_root}  (collection: {collection.name})")
+
+    indexed_mtimes = _load_indexed_mtimes(collection, kind=kind, label=label)
+    user_excludes = tuple(extra_excludes) + tuple(_load_ignore_file(source))
+    nested_repos = _find_nested_repos(source) if kind == "project" else []
     if nested_repos:
         print(f"Skipping {len(nested_repos)} nested git repo(s):")
         for nr in sorted(nested_repos):
@@ -440,8 +583,8 @@ def build_index(
     files_to_clear: list[str] = []
     skipped = 0
 
-    for source_path in iter_source_files(root, user_excludes, nested_repos):
-        rel = str(source_path.relative_to(root))
+    for source_path in iter_source_files(source, user_excludes, nested_repos):
+        rel = str(source_path.relative_to(source))
         try:
             current_mtime = source_path.stat().st_mtime
         except OSError:
@@ -451,18 +594,25 @@ def build_index(
             continue
         if rel in indexed_mtimes:
             files_to_clear.append(rel)
-        for chunk in chunk_file(source_path, root):
+        for chunk in chunk_file(source_path, source):
             chunk["mtime"] = current_mtime
             chunks.append(chunk)
 
     if not chunks:
-        print(f"All {skipped} indexable files unchanged; index is up to date.")
+        kind_label = f"reference '{label}'" if kind == "reference" else "indexable files"
+        print(f"All {skipped} {kind_label} unchanged; index is up to date.")
         return
 
     for rel in files_to_clear:
-        collection.delete(where={"path": rel})
+        if kind == "reference":
+            collection.delete(
+                where={"$and": [{"path": rel}, {"kind": "reference"}, {"label": label}]}
+            )
+        else:
+            collection.delete(where={"$and": [{"path": rel}, {"kind": "project"}]})
 
-    summary = f"Indexing {len(chunks)} chunks from {root}"
+    descr = f"reference '{label}'" if kind == "reference" else "project"
+    summary = f"Indexing {len(chunks)} {descr} chunks from {source}"
     if skipped:
         summary += f" ({skipped} unchanged files skipped)"
     print(summary + "...")
@@ -471,7 +621,10 @@ def build_index(
         batch = chunks[i : i + EMBED_BATCH]
         embeddings = embed_texts([c["content"] for c in batch])
         collection.upsert(
-            ids=[c["id"] for c in batch],
+            ids=[
+                _chunk_id(kind, label, c["path"], c["start_line"], c["end_line"])
+                for c in batch
+            ],
             embeddings=embeddings,
             documents=[c["content"] for c in batch],
             metadatas=[
@@ -480,6 +633,8 @@ def build_index(
                     "start_line": c["start_line"],
                     "end_line": c["end_line"],
                     "mtime": c["mtime"],
+                    "kind": kind,
+                    "label": label,
                 }
                 for c in batch
             ],
@@ -488,3 +643,38 @@ def build_index(
         print(f"  {done}/{len(chunks)}")
 
     print("Done.")
+
+
+def build_index(
+    root: Path,
+    db_path: Path,
+    *,
+    extra_excludes: Sequence[str] = (),
+) -> None:
+    _ingest(
+        source=root,
+        project_root=root,
+        db_path=db_path,
+        kind="project",
+        label="",
+        extra_excludes=extra_excludes,
+    )
+
+
+def add_reference(
+    source: Path,
+    project_root: Path,
+    db_path: Path,
+    *,
+    label: str,
+    extra_excludes: Sequence[str] = (),
+) -> None:
+    """Index `source` as reference material attached to `project_root`'s collection."""
+    _ingest(
+        source=source,
+        project_root=project_root,
+        db_path=db_path,
+        kind="reference",
+        label=label,
+        extra_excludes=extra_excludes,
+    )
