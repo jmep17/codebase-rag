@@ -19,9 +19,18 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p_index = subparsers.add_parser("index", help="Index a codebase directory.")
+    p_index = subparsers.add_parser("index", help="Index a codebase directory (upserts).")
     p_index.add_argument("path", type=Path, help="Root directory to index.")
     p_index.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+
+    p_reindex = subparsers.add_parser(
+        "reindex",
+        help="Wipe the existing index and rebuild from scratch (drops stale chunks).",
+    )
+    p_reindex.add_argument("path", type=Path, help="Root directory to index.")
+    p_reindex.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
     )
 
@@ -41,6 +50,12 @@ def main() -> None:
         if not args.path.exists():
             print(f"Path does not exist: {args.path}", file=sys.stderr)
             sys.exit(1)
+        index_mod.build_index(args.path, args.db)
+    elif args.command == "reindex":
+        if not args.path.exists():
+            print(f"Path does not exist: {args.path}", file=sys.stderr)
+            sys.exit(1)
+        index_mod.reset_index(args.db)
         index_mod.build_index(args.path, args.db)
     elif args.command == "chat":
         if not args.db.exists():

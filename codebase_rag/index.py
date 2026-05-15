@@ -81,6 +81,17 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return response["embeddings"]
 
 
+def reset_index(db_path: Path) -> None:
+    if not db_path.exists():
+        return
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    try:
+        client.delete_collection(COLLECTION_NAME)
+        print(f"Wiped collection '{COLLECTION_NAME}' at {db_path}.")
+    except Exception:
+        pass
+
+
 def build_index(root: Path, db_path: Path) -> None:
     root = root.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)

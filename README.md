@@ -28,6 +28,12 @@ codebase-rag index ~/code/my-project
 
 This walks the directory, chunks each source file, embeds the chunks, and stores them in `~/.codebase-rag/db` by default. Re-running is safe — chunks are upserted by `path:line-range`, so the index updates incrementally.
 
+If files have been **deleted** or **renamed** in the source tree, `index` leaves stale chunks behind. Run `reindex` instead to wipe and rebuild:
+
+```bash
+codebase-rag reindex ~/code/my-project
+```
+
 Chat:
 
 ```bash
@@ -80,7 +86,7 @@ If you swap the embedding model, **delete and rebuild the index** — embedding 
 ## Known limits
 
 - Line-based chunking is dumb. It doesn't know functions from comments. For most codebases this is fine; for huge generated files it can be noisy.
-- Re-indexing doesn't delete chunks for files that have been removed from the source tree. Wipe `~/.codebase-rag/db` if files were deleted.
+- `index` upserts but doesn't delete chunks for files that have been removed or renamed. Use `reindex` for that.
 - mistral-nemo (12B) is the chat default for speed. For deep reasoning over retrieved code, point `CHAT_MODEL` at something larger.
 
 ## License
