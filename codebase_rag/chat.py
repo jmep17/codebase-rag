@@ -7,7 +7,7 @@ from pathlib import Path
 import chromadb
 import ollama
 
-from .index import COLLECTION_NAME, EMBEDDING_MODEL
+from .index import CHROMA_SETTINGS, COLLECTION_NAME, EMBEDDING_MODEL
 
 CHAT_MODEL = "mistral-nemo"
 TOP_K = 8
@@ -55,7 +55,7 @@ def format_context(chunks: list[dict]) -> str:
 
 
 def chat_loop(db_path: Path, *, show_context: bool = False) -> None:
-    client = chromadb.PersistentClient(path=str(db_path))
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     try:
         collection = client.get_collection(COLLECTION_NAME)
     except Exception:

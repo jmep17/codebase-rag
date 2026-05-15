@@ -7,6 +7,9 @@ from typing import Iterator
 
 import chromadb
 import ollama
+from chromadb.config import Settings
+
+CHROMA_SETTINGS = Settings(anonymized_telemetry=False)
 
 EMBEDDING_MODEL = "nomic-embed-text"
 COLLECTION_NAME = "codebase"
@@ -82,7 +85,7 @@ def build_index(root: Path, db_path: Path) -> None:
     root = root.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    client = chromadb.PersistentClient(path=str(db_path))
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     collection = client.get_or_create_collection(COLLECTION_NAME)
 
     chunks: list[dict] = []
