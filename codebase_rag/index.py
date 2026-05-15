@@ -31,6 +31,8 @@ MAX_FILE_BYTES = 200_000
 CHUNK_LINES = 50
 OVERLAP_LINES = 10
 EMBED_BATCH = 32
+MAX_CHUNK_CHARS = 6000  # ~1500 tokens; safe margin under nomic-embed-text's 8192-token window
+EMBED_NUM_CTX = 8192
 
 
 def iter_source_files(root: Path) -> Iterator[Path]:
@@ -65,19 +67,26 @@ def chunk_file(path: Path, root: Path) -> Iterator[dict]:
             break
         start_line = i + 1
         end_line = min(i + CHUNK_LINES, len(lines))
+        content = "\n".join(chunk_lines)
+        if len(content) > MAX_CHUNK_CHARS:
+            content = content[:MAX_CHUNK_CHARS]
         yield {
             "id": f"{rel}:{start_line}-{end_line}",
             "path": str(rel),
             "start_line": start_line,
             "end_line": end_line,
-            "content": "\n".join(chunk_lines),
+            "content": content,
         }
         if end_line >= len(lines):
             break
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    response = ollama.embed(model=EMBEDDING_MODEL, input=texts)
+    response = ollama.embed(
+        model=EMBEDDING_MODEL,
+        input=texts,
+        options={"num_ctx": EMBED_NUM_CTX},
+    )
     return response["embeddings"]
 
 

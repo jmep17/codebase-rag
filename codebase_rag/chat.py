@@ -12,11 +12,11 @@ from .index import CHROMA_SETTINGS, COLLECTION_NAME, EMBEDDING_MODEL, reindex_fi
 from .tools import TOOL_SCHEMAS, run_tool
 
 CHAT_MODEL = "mistral-nemo"
-TOP_K = 8
+TOP_K = 5
 MAX_TURNS = 20
 
 CHAT_OPTIONS = {
-    "num_ctx": 32768,
+    "num_ctx": 65536,
     "num_predict": -1,
     "temperature": 0.1,
 }
@@ -132,12 +132,24 @@ def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None
         history.append({"role": "user", "content": augmented})
 
         for turn in range(MAX_TURNS):
-            response = ollama.chat(
-                model=CHAT_MODEL,
-                messages=history,
-                tools=TOOL_SCHEMAS,
-                options=CHAT_OPTIONS,
-            )
+            try:
+                response = ollama.chat(
+                    model=CHAT_MODEL,
+                    messages=history,
+                    tools=TOOL_SCHEMAS,
+                    options=CHAT_OPTIONS,
+                )
+            except ollama.ResponseError as e:
+                msg_text = str(e).lower()
+                if "context" in msg_text and "length" in msg_text:
+                    print(
+                        "\n(prompt exceeded context window — try `:reset` to clear history, "
+                        f"lower TOP_K in chat.py, or raise num_ctx above {CHAT_OPTIONS['num_ctx']})"
+                    )
+                else:
+                    print(f"\n(ollama error: {e})")
+                history.pop()
+                break
             msg = response["message"]
             history.append(_assistant_msg_from_response(msg))
 
