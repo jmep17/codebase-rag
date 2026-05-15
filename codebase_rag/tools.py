@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
+from .index import _find_nested_repos, _load_ignore_file, iter_source_files
+
 MAX_READ_BYTES = 200_000
+GREP_MAX_RESULTS = 300
+GREP_MAX_FILE_BYTES = 1_000_000
 
 
 def resolve_safe(root: Path, requested: str) -> Path:
@@ -56,6 +62,67 @@ def write_file(root: Path, path: str, content: str, on_change: Callable[[str], N
         "bytes_written": len(actual.encode("utf-8")),
         "lines": actual.count("\n") + 1,
     }
+
+
+def grep(root: Path, pattern: str, file_glob: str | None = None) -> dict:
+    """Regex-search every source file under `root`. Returns up to GREP_MAX_RESULTS matches."""
+    try:
+        regex = re.compile(pattern)
+    except re.error as e:
+        return {"ok": False, "error": f"invalid regex: {e}"}
+
+    root = root.resolve()
+    user_excludes = tuple(_load_ignore_file(root))
+    nested = _find_nested_repos(root)
+
+    matches: list[dict] = []
+    files_scanned = 0
+    truncated = False
+    file_glob_lc = file_glob
+
+    for path in iter_source_files(root, user_excludes, nested):
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        if file_glob_lc and not (
+            fnmatch.fnmatch(rel, file_glob_lc) or fnmatch.fnmatch(path.name, file_glob_lc)
+        ):
+            continue
+        try:
+            if path.stat().st_size > GREP_MAX_FILE_BYTES:
+                continue
+        except OSError:
+            continue
+        files_scanned += 1
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if regex.search(line):
+                matches.append(
+                    {
+                        "path": rel,
+                        "line": lineno,
+                        "text": line.strip()[:240],
+                    }
+                )
+                if len(matches) >= GREP_MAX_RESULTS:
+                    truncated = True
+                    break
+        if truncated:
+            break
+
+    result = {
+        "ok": True,
+        "match_count": len(matches),
+        "files_scanned": files_scanned,
+        "matches": matches,
+    }
+    if truncated:
+        result["truncated"] = True
+        result["note"] = (
+            f"hit {GREP_MAX_RESULTS}-match cap; narrow the pattern or pass file_glob"
+        )
+    return result
 
 
 def edit_file(
@@ -131,6 +198,39 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "grep",
+            "description": (
+                "Regex-search every source file in the project. Use this for exhaustive "
+                "queries — 'list every X', 'find all usages of Y', 'where is Z imported' — "
+                "where the retrieved Context block alone is not enough. Returns each match "
+                "with path, line number, and the matched line. Respects the project's "
+                "exclude rules and skips nested git repos."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": (
+                            "Python regex. Use alternation for variants, e.g. "
+                            "'fetch\\\\(|axios\\\\.|http\\\\.(get|post)'."
+                        ),
+                    },
+                    "file_glob": {
+                        "type": "string",
+                        "description": (
+                            "Optional glob filter (matches the relative path or filename), "
+                            "e.g. 'src/**/*.ts' or '*.py'."
+                        ),
+                    },
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "edit_file",
             "description": "Replace exactly one occurrence of old_string with new_string in a file. Use read_file first to copy the exact text.",
             "parameters": {
@@ -158,6 +258,7 @@ def run_tool(name: str, args: dict, root: Path, on_change: Callable[[str], None]
         "read_file": lambda: read_file(root, **args),
         "write_file": lambda: write_file(root, on_change=on_change, **args),
         "edit_file": lambda: edit_file(root, on_change=on_change, **args),
+        "grep": lambda: grep(root, **args),
     }
     if name not in impls:
         return json.dumps({"ok": False, "error": f"unknown tool: {name}"})

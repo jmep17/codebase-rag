@@ -202,10 +202,13 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | Tool         | Args                              | Behavior                                                                |
 | ------------ | --------------------------------- | ----------------------------------------------------------------------- |
 | `read_file`  | `path`                            | Returns full file content. Refuses files over 200KB; use retrieval instead. |
+| `grep`       | `pattern`, `file_glob?`           | Regex-search every source file. Respects ignore rules and nested-repo skips. Caps at 300 matches. **Use this for "list every / find all" queries** — retrieval alone is top-K and will miss matches. |
 | `write_file` | `path`, `content`                 | Overwrites the file. Reads it back and reports bytes/lines written.     |
 | `edit_file`  | `path`, `old_string`, `new_string`| Replaces exactly one occurrence. Errors if `old_string` is missing or appears more than once. |
 
 All paths resolve under `--root`. Anything outside is rejected.
+
+The system prompt instructs the agent to call `grep` for any enumeration question (e.g. "list every API call this app makes") rather than relying on the retrieved Context block, which is semantic top-K and will silently miss matches.
 
 ## Tuning
 
