@@ -31,8 +31,9 @@ MAX_FILE_BYTES = 200_000
 CHUNK_LINES = 50
 OVERLAP_LINES = 10
 EMBED_BATCH = 32
-MAX_CHUNK_CHARS = 6000  # ~1500 tokens; safe margin under nomic-embed-text's 8192-token window
+MAX_CHUNK_CHARS = 4000  # ~1000 tokens; conservative margin under nomic-embed-text's 8192-token window
 EMBED_NUM_CTX = 8192
+EMBED_TRUNCATE_LADDER = (4000, 2000, 1000, 500)
 
 
 def iter_source_files(root: Path) -> Iterator[Path]:
@@ -81,13 +82,34 @@ def chunk_file(path: Path, root: Path) -> Iterator[dict]:
             break
 
 
-def embed_texts(texts: list[str]) -> list[list[float]]:
-    response = ollama.embed(
+def _embed_one(text: str) -> list[float]:
+    return ollama.embed(
         model=EMBEDDING_MODEL,
-        input=texts,
+        input=text,
         options={"num_ctx": EMBED_NUM_CTX},
-    )
-    return response["embeddings"]
+    )["embeddings"][0]
+
+
+def _embed_one_with_fallback(text: str) -> list[float]:
+    last_err: Exception | None = None
+    for limit in EMBED_TRUNCATE_LADDER:
+        try:
+            return _embed_one(text[:limit])
+        except Exception as e:
+            last_err = e
+    raise RuntimeError(f"could not embed chunk after truncation fallbacks: {last_err}")
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    try:
+        response = ollama.embed(
+            model=EMBEDDING_MODEL,
+            input=texts,
+            options={"num_ctx": EMBED_NUM_CTX},
+        )
+        return response["embeddings"]
+    except Exception:
+        return [_embed_one_with_fallback(t) for t in texts]
 
 
 def reset_index(db_path: Path) -> None:
