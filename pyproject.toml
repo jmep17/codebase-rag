@@ -1,0 +1,16 @@
+[project]
+name = "codebase-rag"
+version = "0.1.0"
+description = "Local codebase RAG with Ollama + mistral-nemo"
+requires-python = ">=3.10"
+dependencies = [
+    "ollama>=0.3.0",
+    "chromadb>=0.5.0",
+]
+
+[project.scripts]
+codebase-rag = "codebase_rag.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
