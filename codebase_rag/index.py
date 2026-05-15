@@ -31,9 +31,9 @@ MAX_FILE_BYTES = 200_000
 CHUNK_LINES = 50
 OVERLAP_LINES = 10
 EMBED_BATCH = 32
-MAX_CHUNK_CHARS = 4000  # ~1000 tokens; conservative margin under nomic-embed-text's 8192-token window
+MAX_CHUNK_CHARS = 2000  # ~500 tokens for code; very safe margin even on symbol-dense files
 EMBED_NUM_CTX = 8192
-EMBED_TRUNCATE_LADDER = (4000, 2000, 1000, 500)
+EMBED_TRUNCATE_LADDER = (2000, 1000, 500, 250)
 
 
 def iter_source_files(root: Path) -> Iterator[Path]:
