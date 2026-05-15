@@ -1,30 +1,37 @@
-"""Chat loop with mistral-nemo, augmented with retrieval from a Chroma index."""
+"""Agent loop with mistral-nemo: RAG retrieval + file-editing tool calls."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import chromadb
 import ollama
 
-from .index import CHROMA_SETTINGS, COLLECTION_NAME, EMBEDDING_MODEL
+from .index import CHROMA_SETTINGS, COLLECTION_NAME, EMBEDDING_MODEL, reindex_file
+from .tools import TOOL_SCHEMAS, run_tool
 
 CHAT_MODEL = "mistral-nemo"
 TOP_K = 8
+MAX_TURNS = 20
 
 CHAT_OPTIONS = {
     "num_ctx": 32768,
     "num_predict": -1,
-    "temperature": 0.2,
+    "temperature": 0.1,
 }
 
-SYSTEM_PROMPT = """You are a code assistant. Answer questions about the user's codebase using the provided context chunks.
+SYSTEM_PROMPT = """You are a coding assistant for the user's local codebase.
 
-Rules:
-- Cite file paths and line ranges (e.g. src/auth.py:42-67) when making claims about the code.
-- If the context doesn't contain enough information to answer, say so plainly. Do not invent functions, files, or behavior.
-- Prefer quoting short, exact snippets over paraphrasing.
-- Be concise. Code-aware questions deserve code-aware answers.
+You have three tools: read_file, write_file, edit_file. Every user turn also includes a "Context from codebase" block with retrieved chunks.
+
+Strict rules:
+- For any file change, emit a real tool call. Never describe a change you "would make" — either do it or ask a question.
+- Before edit_file, call read_file first to get the exact text. The old_string must appear once and match character-for-character including whitespace.
+- write_file content must be complete. Never write placeholders like "...", "[rest omitted]", "// continues", or "// ... existing code ...".
+- Never claim a file was written or edited until you have received a tool result with "ok": true. If a tool result has "ok": false, address the error — do not pretend it succeeded.
+- Cite file paths and line ranges (e.g. src/auth.py:42-67) when explaining code or proposed changes.
+- If retrieved context is insufficient, say so or call read_file. Do not invent functions, files, or symbols.
 """
 
 
@@ -54,16 +61,46 @@ def format_context(chunks: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def chat_loop(db_path: Path, *, show_context: bool = False) -> None:
+def _assistant_msg_from_response(msg) -> dict:
+    """Coerce an Ollama response message into a plain dict for history."""
+    out = {"role": "assistant", "content": msg.get("content", "") or ""}
+    tool_calls = msg.get("tool_calls")
+    if tool_calls:
+        out["tool_calls"] = [
+            {
+                "function": {
+                    "name": tc["function"]["name"],
+                    "arguments": tc["function"]["arguments"],
+                }
+            }
+            for tc in tool_calls
+        ]
+    return out
+
+
+def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None:
+    root = root.resolve()
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     try:
         collection = client.get_collection(COLLECTION_NAME)
     except Exception:
-        print(f"No '{COLLECTION_NAME}' collection found at {db_path}. Run `codebase-rag index <path>` first.")
+        print(
+            f"No '{COLLECTION_NAME}' collection found at {db_path}. "
+            f"Run `codebase-rag index <path>` first."
+        )
         return
 
+    def on_change(rel_path: str) -> None:
+        try:
+            reindex_file(rel_path, root, db_path)
+        except Exception as e:
+            print(f"  (reindex failed for {rel_path}: {e})")
+
     history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    print(f"Chatting with {CHAT_MODEL}. Type :q or Ctrl-D to exit, :reset to clear history.")
+    print(
+        f"Chatting with {CHAT_MODEL}. Root: {root}\n"
+        f"Type :q or Ctrl-D to exit, :reset to clear history."
+    )
 
     while True:
         try:
@@ -87,24 +124,40 @@ def chat_loop(db_path: Path, *, show_context: bool = False) -> None:
             print("\n--- retrieved ---")
             for c in chunks:
                 print(f"  {c['path']}:{c['start_line']}-{c['end_line']}")
-            print("-----------------\n")
+            print("-----------------")
 
         augmented = (
             f"Context from codebase:\n\n{context}\n\n---\n\nQuestion: {user_input}"
         )
         history.append({"role": "user", "content": augmented})
 
-        response_text = ""
-        for part in ollama.chat(
-            model=CHAT_MODEL,
-            messages=history,
-            options=CHAT_OPTIONS,
-            stream=True,
-        ):
-            piece = part["message"]["content"]
-            print(piece, end="", flush=True)
-            response_text += piece
-        print()
+        for turn in range(MAX_TURNS):
+            response = ollama.chat(
+                model=CHAT_MODEL,
+                messages=history,
+                tools=TOOL_SCHEMAS,
+                options=CHAT_OPTIONS,
+            )
+            msg = response["message"]
+            history.append(_assistant_msg_from_response(msg))
 
-        history[-1] = {"role": "user", "content": user_input}
-        history.append({"role": "assistant", "content": response_text})
+            tool_calls = msg.get("tool_calls") or []
+            if not tool_calls:
+                text = (msg.get("content") or "").strip()
+                print(text if text else "(no response)")
+                break
+
+            for call in tool_calls:
+                name = call["function"]["name"]
+                args = call["function"]["arguments"]
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {}
+                print(f"  -> {name}({', '.join(args.keys())})")
+                result = run_tool(name, args, root, on_change)
+                print(f"     {result[:200]}")
+                history.append({"role": "tool", "content": result})
+        else:
+            print(f"(stopped after {MAX_TURNS} tool-call rounds)")

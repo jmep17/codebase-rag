@@ -39,6 +39,12 @@ def main() -> None:
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
     )
     p_chat.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Root directory the model may read/write via tools (default: current working directory).",
+    )
+    p_chat.add_argument(
         "--show-context",
         action="store_true",
         help="Print the file paths and line ranges retrieved for each question.",
@@ -64,7 +70,12 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
-        chat_mod.chat_loop(args.db, show_context=args.show_context)
+        if not args.root.exists():
+            print(f"Root does not exist: {args.root}", file=sys.stderr)
+            sys.exit(1)
+        chat_mod.agent_loop(
+            args.db, root=args.root.resolve(), show_context=args.show_context
+        )
 
 
 if __name__ == "__main__":

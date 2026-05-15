@@ -92,6 +92,34 @@ def reset_index(db_path: Path) -> None:
         pass
 
 
+def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
+    """Drop existing chunks for `rel_path` and re-chunk/embed the current file."""
+    root = root.resolve()
+    abs_path = root / rel_path
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    collection = client.get_or_create_collection(COLLECTION_NAME)
+    collection.delete(where={"path": rel_path})
+    if not abs_path.exists() or not abs_path.is_file():
+        return
+    chunks = list(chunk_file(abs_path, root))
+    if not chunks:
+        return
+    embeddings = embed_texts([c["content"] for c in chunks])
+    collection.upsert(
+        ids=[c["id"] for c in chunks],
+        embeddings=embeddings,
+        documents=[c["content"] for c in chunks],
+        metadatas=[
+            {
+                "path": c["path"],
+                "start_line": c["start_line"],
+                "end_line": c["end_line"],
+            }
+            for c in chunks
+        ],
+    )
+
+
 def build_index(root: Path, db_path: Path) -> None:
     root = root.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)

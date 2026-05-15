@@ -37,12 +37,17 @@ codebase-rag reindex ~/code/my-project
 Chat:
 
 ```bash
+cd ~/code/my-project
 codebase-rag chat
 > how does the auth middleware work?
-> where is the database connection set up?
+> add a docstring to the parse_token function
 > :reset                 # clears conversation history
 > :q                     # quit
 ```
+
+The model has three tools: `read_file`, `write_file`, `edit_file`. It will use them automatically when you ask for changes ("add a test for…", "rename X to Y", "extract this into a helper"). Edits are confined to `--root` (defaults to the current working directory).
+
+After every successful write or edit, the affected file is automatically re-chunked and the index is updated — no manual `reindex` needed for edits the agent makes.
 
 Show what was retrieved (useful for tuning):
 
@@ -50,11 +55,17 @@ Show what was retrieved (useful for tuning):
 codebase-rag chat --show-context
 ```
 
+Sandbox tool calls to a specific directory:
+
+```bash
+codebase-rag chat --root ~/code/my-project
+```
+
 Use a different index location:
 
 ```bash
 codebase-rag index ~/code/project-a --db ~/.codebase-rag/project-a
-codebase-rag chat --db ~/.codebase-rag/project-a
+codebase-rag chat --db ~/.codebase-rag/project-a --root ~/code/project-a
 ```
 
 ## How it works
@@ -63,9 +74,20 @@ codebase-rag chat --db ~/.codebase-rag/project-a
 2. **Chunk** each file into 50-line windows with 10-line overlap, keyed by `path:start-end`.
 3. **Embed** each chunk via Ollama's `nomic-embed-text` (batched 32 at a time).
 4. **Store** the vectors in a local Chroma collection.
-5. At query time, embed the question, retrieve the top 8 nearest chunks, and ask `mistral-nemo` with the chunks as a `Context:` block plus your question.
+5. At query time, embed the question, retrieve the top 8 nearest chunks, and call `mistral-nemo` with `tools=[read_file, write_file, edit_file]` and the chunks as a `Context:` block.
+6. If the model emits tool calls, execute them (sandboxed under `--root`), feed each JSON result back as a `role: "tool"` message, and re-call the model. Loop until it stops emitting tool calls. Each successful `write_file` / `edit_file` re-chunks just that file.
 
-The system prompt instructs the model to cite file paths and line ranges, and to admit when the retrieved context doesn't cover the question.
+The system prompt forbids the model from claiming a write succeeded until it sees a tool result with `"ok": true`, and forbids placeholders like `"..."` or `"[rest omitted]"` in file content.
+
+### Tools
+
+| Tool         | Args                              | Behavior                                                                |
+| ------------ | --------------------------------- | ----------------------------------------------------------------------- |
+| `read_file`  | `path`                            | Returns full file content. Refuses files over 200KB; use retrieval instead. |
+| `write_file` | `path`, `content`                 | Overwrites the file. Reads it back and reports bytes/lines written.     |
+| `edit_file`  | `path`, `old_string`, `new_string`| Replaces exactly one occurrence. Errors if `old_string` is missing or appears more than once. |
+
+All paths resolve under `--root`. Anything outside is rejected.
 
 ## Tuning
 
@@ -87,7 +109,8 @@ If you swap the embedding model, **delete and rebuild the index** — embedding 
 
 - Line-based chunking is dumb. It doesn't know functions from comments. For most codebases this is fine; for huge generated files it can be noisy.
 - `index` upserts but doesn't delete chunks for files that have been removed or renamed. Use `reindex` for that.
-- mistral-nemo (12B) is the chat default for speed. For deep reasoning over retrieved code, point `CHAT_MODEL` at something larger.
+- mistral-nemo (12B) is the chat default for speed. For deep reasoning over retrieved code — or if it narrates edits without actually calling tools — point `CHAT_MODEL` at something larger like `qwen2.5-coder:32b` or `llama3.3:70b`.
+- The agent caps at 20 tool-call rounds per user message. Tune `MAX_TURNS` in `chat.py` if you need longer multi-step edits.
 
 ## License
 
