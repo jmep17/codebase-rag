@@ -15,25 +15,34 @@ EMBEDDING_MODEL = "nomic-embed-text"
 COLLECTION_NAME = "codebase"
 
 EXCLUDE_DIRS = {
-    ".git", "node_modules", "__pycache__", ".venv", "venv", "env",
-    "dist", "build", ".next", "target", ".pytest_cache", ".mypy_cache",
-    ".ruff_cache", ".tox", "coverage", ".nuxt", ".turbo", ".cache",
+    ".git", ".svn", ".hg",
+    "node_modules", "bower_components", "vendor", "third_party", "Pods",
+    "__pycache__", ".venv", "venv", "env", ".tox",
+    "dist", "build", "out", ".next", ".nuxt", ".turbo", ".svelte-kit",
+    "target", ".gradle", "DerivedData",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", "coverage",
+    ".idea", ".vscode",
 }
 EXCLUDE_EXTS = {
     ".lock", ".log", ".bin", ".exe", ".so", ".dylib", ".o", ".a",
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff",
     ".pdf", ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".mp4", ".mp3", ".wav", ".ogg", ".flac",
+    ".mp4", ".mov", ".mp3", ".wav", ".ogg", ".flac",
     ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
     ".pyc", ".pyo", ".class", ".jar",
+    ".map",  # source maps
 }
+EXCLUDE_NAME_PATTERNS = (
+    ".min.js", ".min.css", ".bundle.js", ".bundle.css",
+    "-lock.json", "_pb.go", "_pb.py", ".pb.go",
+)
 MAX_FILE_BYTES = 200_000
-CHUNK_LINES = 50
-OVERLAP_LINES = 10
+CHUNK_LINES = 80
+OVERLAP_LINES = 15
 EMBED_BATCH = 32
-MAX_CHUNK_CHARS = 2000  # ~500 tokens for code; very safe margin even on symbol-dense files
+MAX_CHUNK_CHARS = 3500  # ~900 tokens; safe under 8192-token window, with fallback for edge cases
 EMBED_NUM_CTX = 8192
-EMBED_TRUNCATE_LADDER = (2000, 1000, 500, 250)
+EMBED_TRUNCATE_LADDER = (3500, 2000, 1000, 500)
 
 
 def iter_source_files(root: Path) -> Iterator[Path]:
@@ -43,6 +52,9 @@ def iter_source_files(root: Path) -> Iterator[Path]:
         if any(part in EXCLUDE_DIRS for part in path.parts):
             continue
         if path.suffix.lower() in EXCLUDE_EXTS:
+            continue
+        name_lower = path.name.lower()
+        if any(name_lower.endswith(pat) for pat in EXCLUDE_NAME_PATTERNS):
             continue
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
@@ -135,6 +147,10 @@ def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
     chunks = list(chunk_file(abs_path, root))
     if not chunks:
         return
+    try:
+        current_mtime = abs_path.stat().st_mtime
+    except OSError:
+        current_mtime = 0.0
     embeddings = embed_texts([c["content"] for c in chunks])
     collection.upsert(
         ids=[c["id"] for c in chunks],
@@ -145,10 +161,28 @@ def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
                 "path": c["path"],
                 "start_line": c["start_line"],
                 "end_line": c["end_line"],
+                "mtime": current_mtime,
             }
             for c in chunks
         ],
     )
+
+
+def _load_indexed_mtimes(collection) -> dict[str, float]:
+    """Return {relative_path: mtime} for files already in the collection."""
+    try:
+        result = collection.get(include=["metadatas"])
+    except Exception:
+        return {}
+    out: dict[str, float] = {}
+    for meta in result.get("metadatas") or []:
+        if not meta:
+            continue
+        path = meta.get("path")
+        mtime = meta.get("mtime")
+        if path and mtime is not None and path not in out:
+            out[path] = float(mtime)
+    return out
 
 
 def build_index(root: Path, db_path: Path) -> None:
@@ -158,15 +192,38 @@ def build_index(root: Path, db_path: Path) -> None:
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     collection = client.get_or_create_collection(COLLECTION_NAME)
 
+    indexed_mtimes = _load_indexed_mtimes(collection)
+
     chunks: list[dict] = []
+    files_to_clear: list[str] = []
+    skipped = 0
+
     for source_path in iter_source_files(root):
-        chunks.extend(chunk_file(source_path, root))
+        rel = str(source_path.relative_to(root))
+        try:
+            current_mtime = source_path.stat().st_mtime
+        except OSError:
+            continue
+        if indexed_mtimes.get(rel) == current_mtime:
+            skipped += 1
+            continue
+        if rel in indexed_mtimes:
+            files_to_clear.append(rel)
+        for chunk in chunk_file(source_path, root):
+            chunk["mtime"] = current_mtime
+            chunks.append(chunk)
 
     if not chunks:
-        print(f"No indexable files found under {root}.")
+        print(f"All {skipped} indexable files unchanged; index is up to date.")
         return
 
-    print(f"Indexing {len(chunks)} chunks from {root}...")
+    for rel in files_to_clear:
+        collection.delete(where={"path": rel})
+
+    summary = f"Indexing {len(chunks)} chunks from {root}"
+    if skipped:
+        summary += f" ({skipped} unchanged files skipped)"
+    print(summary + "...")
 
     for i in range(0, len(chunks), EMBED_BATCH):
         batch = chunks[i : i + EMBED_BATCH]
@@ -180,6 +237,7 @@ def build_index(root: Path, db_path: Path) -> None:
                     "path": c["path"],
                     "start_line": c["start_line"],
                     "end_line": c["end_line"],
+                    "mtime": c["mtime"],
                 }
                 for c in batch
             ],
