@@ -227,8 +227,19 @@ def stats(db_path: Path) -> None:
             print(f"  {n:5d}  {path}")
 
 
-def search(db_path: Path, query: str, top_k: int = 5) -> None:
-    """One-shot semantic search: prints the top-K chunks that match the query."""
+def search(
+    db_path: Path,
+    query: str,
+    top_k: int = 5,
+    file_pattern: str | None = None,
+    headers_only: bool = False,
+) -> None:
+    """One-shot semantic search: prints chunks matching the query.
+
+    If `file_pattern` is given, results are filtered to chunks whose path matches
+    the glob (fnmatch). `headers_only` prints only file:line headers without
+    chunk content.
+    """
     if not db_path.exists():
         print(f"No index found at {db_path}.")
         return
@@ -244,27 +255,72 @@ def search(db_path: Path, query: str, top_k: int = 5) -> None:
         input=query,
         options={"num_ctx": EMBED_NUM_CTX},
     )["embeddings"][0]
-    result = collection.query(query_embeddings=[embedding], n_results=top_k)
+
+    # When filtering by file, fetch more candidates so we still get top_k after filtering.
+    fetch_n = top_k * 20 if file_pattern else top_k
+    result = collection.query(query_embeddings=[embedding], n_results=fetch_n)
 
     docs = result["documents"][0]
     metas = result["metadatas"][0]
     distances = (result.get("distances") or [[]])[0]
 
-    if not docs:
+    hits: list[tuple[float | None, dict, str]] = []
+    for i, (doc, meta) in enumerate(zip(docs, metas)):
+        if file_pattern and not fnmatch.fnmatch(meta.get("path", ""), file_pattern):
+            continue
+        dist = distances[i] if i < len(distances) else None
+        hits.append((dist, meta, doc))
+        if len(hits) >= top_k:
+            break
+
+    if not hits:
         print("(no results)")
         return
 
-    for i, (doc, meta) in enumerate(zip(docs, metas)):
-        dist = distances[i] if i < len(distances) else None
+    for i, (dist, meta, doc) in enumerate(hits):
         header = f"[{i + 1}] {meta['path']}:{meta['start_line']}-{meta['end_line']}"
         if dist is not None:
             header += f"  (distance {dist:.3f})"
         print(header)
-        preview_lines = doc.splitlines()[:6]
-        for line in preview_lines:
-            print(f"    {line}")
-        if len(doc.splitlines()) > 6:
-            print(f"    ... ({len(doc.splitlines()) - 6} more lines)")
+        if not headers_only:
+            for line in doc.splitlines():
+                print(f"    {line}")
+            print()
+
+
+def show_file(db_path: Path, file_pattern: str) -> None:
+    """List every chunk for files whose path matches `file_pattern` (glob)."""
+    if not db_path.exists():
+        print(f"No index found at {db_path}.")
+        return
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    try:
+        collection = client.get_collection(COLLECTION_NAME)
+    except Exception:
+        print(f"No '{COLLECTION_NAME}' collection at {db_path}.")
+        return
+
+    result = collection.get(include=["documents", "metadatas"])
+    docs = result.get("documents") or []
+    metas = result.get("metadatas") or []
+
+    matching: list[tuple[dict, str]] = []
+    for meta, doc in zip(metas, docs):
+        if not meta or not doc:
+            continue
+        if fnmatch.fnmatch(meta.get("path", ""), file_pattern):
+            matching.append((meta, doc))
+
+    if not matching:
+        print(f"No indexed chunks match {file_pattern!r}.")
+        return
+
+    matching.sort(key=lambda mc: (mc[0].get("path", ""), mc[0].get("start_line", 0)))
+    print(f"{len(matching)} chunk(s) match {file_pattern!r}:\n")
+    for meta, doc in matching:
+        print(f"=== {meta['path']}:{meta['start_line']}-{meta['end_line']} ===")
+        for line in doc.splitlines():
+            print(line)
         print()
 
 

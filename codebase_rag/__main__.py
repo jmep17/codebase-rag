@@ -65,6 +65,27 @@ def main() -> None:
     p_search.add_argument(
         "--top-k", "-k", type=int, default=5, help="Number of chunks to return (default: 5)."
     )
+    p_search.add_argument(
+        "--file",
+        "-f",
+        type=str,
+        default=None,
+        metavar="GLOB",
+        help="Restrict results to chunks whose path matches this glob (e.g. 'src/*.py').",
+    )
+    p_search.add_argument(
+        "--headers-only",
+        action="store_true",
+        help="Print only file:line headers, no chunk content.",
+    )
+
+    p_show = subparsers.add_parser(
+        "show", help="Print every indexed chunk for files matching a path glob."
+    )
+    p_show.add_argument("file", type=str, metavar="GLOB", help="Path glob, e.g. 'src/auth.py' or 'src/*.py'.")
+    p_show.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
 
     p_chat = subparsers.add_parser("chat", help="Start an interactive chat session.")
     p_chat.add_argument(
@@ -98,7 +119,15 @@ def main() -> None:
     elif args.command == "stats":
         index_mod.stats(args.db)
     elif args.command == "search":
-        index_mod.search(args.db, args.query, top_k=args.top_k)
+        index_mod.search(
+            args.db,
+            args.query,
+            top_k=args.top_k,
+            file_pattern=args.file,
+            headers_only=args.headers_only,
+        )
+    elif args.command == "show":
+        index_mod.show_file(args.db, args.file)
     elif args.command == "chat":
         if not args.db.exists():
             print(

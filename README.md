@@ -75,18 +75,26 @@ codebase-rag stats
 #     ...
 ```
 
-Run a one-shot retrieval query (what chat would see for that question) without burning chat tokens:
+Run a one-shot retrieval query (what chat would see for that question) without burning chat tokens. Full chunk content is printed by default:
 
 ```bash
 codebase-rag search "where is the database connection set up"
-# [1] src/db/connect.ts:1-65   (distance 0.241)
-#     import { Pool } from "pg";
-#     ...
-# [2] config/env.ts:12-38      (distance 0.297)
-#     ...
+
+# Filter to a specific file or glob:
+codebase-rag search "where is auth checked" --file 'src/middleware/*'
+
+# Just headers, no chunk content (quick scan):
+codebase-rag search "auth" --headers-only --top-k 20
 ```
 
-Use `--top-k 10` for more results, `--db <path>` if you have multiple indexes.
+Print every chunk for a specific file (no query — just dump what's indexed for that path):
+
+```bash
+codebase-rag show src/auth.py
+codebase-rag show 'src/*.py'       # glob is fine
+```
+
+`--top-k` (default 5), `--db <path>` for non-default index locations.
 
 Chat:
 
