@@ -24,6 +24,14 @@ def main() -> None:
     p_index.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
     )
+    p_index.add_argument(
+        "--exclude",
+        "-x",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Glob pattern to exclude (matched against relative path and bare filename). Repeatable.",
+    )
 
     p_reindex = subparsers.add_parser(
         "reindex",
@@ -32,6 +40,14 @@ def main() -> None:
     p_reindex.add_argument("path", type=Path, help="Root directory to index.")
     p_reindex.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_reindex.add_argument(
+        "--exclude",
+        "-x",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help="Glob pattern to exclude (matched against relative path and bare filename). Repeatable.",
     )
 
     p_chat = subparsers.add_parser("chat", help="Start an interactive chat session.")
@@ -56,13 +72,13 @@ def main() -> None:
         if not args.path.exists():
             print(f"Path does not exist: {args.path}", file=sys.stderr)
             sys.exit(1)
-        index_mod.build_index(args.path, args.db)
+        index_mod.build_index(args.path, args.db, extra_excludes=args.exclude)
     elif args.command == "reindex":
         if not args.path.exists():
             print(f"Path does not exist: {args.path}", file=sys.stderr)
             sys.exit(1)
         index_mod.reset_index(args.db)
-        index_mod.build_index(args.path, args.db)
+        index_mod.build_index(args.path, args.db, extra_excludes=args.exclude)
     elif args.command == "chat":
         if not args.db.exists():
             print(

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Sequence
 
 import chromadb
 import ollama
@@ -36,6 +37,7 @@ EXCLUDE_NAME_PATTERNS = (
     ".min.js", ".min.css", ".bundle.js", ".bundle.css",
     "-lock.json", "_pb.go", "_pb.py", ".pb.go",
 )
+IGNORE_FILE_NAME = ".codebaseragignore"
 MAX_FILE_BYTES = 200_000
 CHUNK_LINES = 80
 OVERLAP_LINES = 15
@@ -45,7 +47,52 @@ EMBED_NUM_CTX = 8192
 EMBED_TRUNCATE_LADDER = (3500, 2000, 1000, 500)
 
 
-def iter_source_files(root: Path) -> Iterator[Path]:
+def _find_nested_repos(root: Path) -> list[str]:
+    """Return relative paths of subdirectories that contain their own .git directory."""
+    nested: list[str] = []
+    for git_dir in root.rglob(".git"):
+        if not git_dir.is_dir():
+            continue
+        if any(part in EXCLUDE_DIRS for part in git_dir.parts[:-1]):
+            continue
+        try:
+            rel = git_dir.parent.relative_to(root)
+        except ValueError:
+            continue
+        rel_str = str(rel).replace("\\", "/")
+        if rel_str == ".":
+            continue
+        nested.append(rel_str)
+    return nested
+
+
+def _load_ignore_file(root: Path) -> list[str]:
+    ignore_path = root / IGNORE_FILE_NAME
+    if not ignore_path.is_file():
+        return []
+    patterns = []
+    for line in ignore_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        patterns.append(line)
+    return patterns
+
+
+def _matches_user_pattern(rel_path: str, name: str, patterns: Sequence[str]) -> bool:
+    rel_posix = rel_path.replace("\\", "/")
+    for pat in patterns:
+        if fnmatch.fnmatch(rel_posix, pat) or fnmatch.fnmatch(name, pat):
+            return True
+    return False
+
+
+def iter_source_files(
+    root: Path,
+    user_excludes: Sequence[str] = (),
+    nested_repos: Sequence[str] = (),
+) -> Iterator[Path]:
+    nested_prefixes = tuple(p + "/" for p in nested_repos)
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -55,6 +102,11 @@ def iter_source_files(root: Path) -> Iterator[Path]:
             continue
         name_lower = path.name.lower()
         if any(name_lower.endswith(pat) for pat in EXCLUDE_NAME_PATTERNS):
+            continue
+        rel = str(path.relative_to(root)).replace("\\", "/")
+        if nested_prefixes and rel.startswith(nested_prefixes):
+            continue
+        if user_excludes and _matches_user_pattern(rel, path.name, user_excludes):
             continue
         try:
             if path.stat().st_size > MAX_FILE_BYTES:
@@ -185,7 +237,12 @@ def _load_indexed_mtimes(collection) -> dict[str, float]:
     return out
 
 
-def build_index(root: Path, db_path: Path) -> None:
+def build_index(
+    root: Path,
+    db_path: Path,
+    *,
+    extra_excludes: Sequence[str] = (),
+) -> None:
     root = root.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -193,12 +250,18 @@ def build_index(root: Path, db_path: Path) -> None:
     collection = client.get_or_create_collection(COLLECTION_NAME)
 
     indexed_mtimes = _load_indexed_mtimes(collection)
+    user_excludes = tuple(extra_excludes) + tuple(_load_ignore_file(root))
+    nested_repos = _find_nested_repos(root)
+    if nested_repos:
+        print(f"Skipping {len(nested_repos)} nested git repo(s):")
+        for nr in sorted(nested_repos):
+            print(f"  - {nr}")
 
     chunks: list[dict] = []
     files_to_clear: list[str] = []
     skipped = 0
 
-    for source_path in iter_source_files(root):
+    for source_path in iter_source_files(root, user_excludes, nested_repos):
         rel = str(source_path.relative_to(root))
         try:
             current_mtime = source_path.stat().st_mtime

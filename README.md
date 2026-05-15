@@ -34,6 +34,30 @@ If files have been **deleted** or **renamed** in the source tree, `index` leaves
 codebase-rag reindex ~/code/my-project
 ```
 
+### Excluding files
+
+Nested git repositories (e.g. cloned dependencies sitting inside your project) are detected automatically — any directory below the project root that contains its own `.git/` is treated as a nested repo and its whole subtree is skipped. The indexer prints which nested repos it found at startup.
+
+Skip additional files or patterns via `--exclude` (repeatable, glob syntax). Patterns match against the relative path and the bare filename:
+
+```bash
+codebase-rag index ~/code/my-project \
+    --exclude '*.test.js' \
+    --exclude 'tests/*' \
+    --exclude 'secret_*.py'
+```
+
+Or drop a `.codebaseragignore` file in the project root — one pattern per line, `#` for comments:
+
+```
+# don't index test data or anything generated
+fixtures/*
+**/*.generated.ts
+notes/scratch.md
+```
+
+Files already in the index that are now excluded stay there until you `reindex` (cheap; just leaves dead chunks). Common junk (`.git`, `node_modules`, build artifacts, binaries, source maps, minified bundles) is already excluded by default — `--exclude` is for project-specific additions.
+
 Chat:
 
 ```bash
