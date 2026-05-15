@@ -58,6 +58,36 @@ notes/scratch.md
 
 Files already in the index that are now excluded stay there until you `reindex` (cheap; just leaves dead chunks). Common junk (`.git`, `node_modules`, build artifacts, binaries, source maps, minified bundles) is already excluded by default — `--exclude` is for project-specific additions.
 
+### Inspecting the index
+
+See what's in there without starting a chat:
+
+```bash
+codebase-rag stats
+# Index:  /Users/you/.codebase-rag/db
+# Chunks: 4231
+# Files:  812
+# Disk:   38.4 MB
+#
+# Largest files by chunk count:
+#     47  src/parser.ts
+#     33  packages/core/state.ts
+#     ...
+```
+
+Run a one-shot retrieval query (what chat would see for that question) without burning chat tokens:
+
+```bash
+codebase-rag search "where is the database connection set up"
+# [1] src/db/connect.ts:1-65   (distance 0.241)
+#     import { Pool } from "pg";
+#     ...
+# [2] config/env.ts:12-38      (distance 0.297)
+#     ...
+```
+
+Use `--top-k 10` for more results, `--db <path>` if you have multiple indexes.
+
 Chat:
 
 ```bash

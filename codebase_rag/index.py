@@ -187,6 +187,87 @@ def reset_index(db_path: Path) -> None:
         pass
 
 
+def stats(db_path: Path) -> None:
+    """Print a summary of what's currently indexed."""
+    if not db_path.exists():
+        print(f"No index found at {db_path}.")
+        return
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    try:
+        collection = client.get_collection(COLLECTION_NAME)
+    except Exception:
+        print(f"No '{COLLECTION_NAME}' collection at {db_path}.")
+        return
+
+    total = collection.count()
+    result = collection.get(include=["metadatas"])
+    metas = result.get("metadatas") or []
+
+    files: dict[str, int] = {}
+    for meta in metas:
+        if not meta:
+            continue
+        path = meta.get("path", "?")
+        files[path] = files.get(path, 0) + 1
+
+    print(f"Index:  {db_path}")
+    print(f"Chunks: {total}")
+    print(f"Files:  {len(files)}")
+
+    try:
+        size = sum(p.stat().st_size for p in db_path.rglob("*") if p.is_file())
+        print(f"Disk:   {size / 1_000_000:.1f} MB")
+    except OSError:
+        pass
+
+    top = sorted(files.items(), key=lambda kv: -kv[1])[:15]
+    if top:
+        print("\nLargest files by chunk count:")
+        for path, n in top:
+            print(f"  {n:5d}  {path}")
+
+
+def search(db_path: Path, query: str, top_k: int = 5) -> None:
+    """One-shot semantic search: prints the top-K chunks that match the query."""
+    if not db_path.exists():
+        print(f"No index found at {db_path}.")
+        return
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    try:
+        collection = client.get_collection(COLLECTION_NAME)
+    except Exception:
+        print(f"No '{COLLECTION_NAME}' collection at {db_path}.")
+        return
+
+    embedding = ollama.embed(
+        model=EMBEDDING_MODEL,
+        input=query,
+        options={"num_ctx": EMBED_NUM_CTX},
+    )["embeddings"][0]
+    result = collection.query(query_embeddings=[embedding], n_results=top_k)
+
+    docs = result["documents"][0]
+    metas = result["metadatas"][0]
+    distances = (result.get("distances") or [[]])[0]
+
+    if not docs:
+        print("(no results)")
+        return
+
+    for i, (doc, meta) in enumerate(zip(docs, metas)):
+        dist = distances[i] if i < len(distances) else None
+        header = f"[{i + 1}] {meta['path']}:{meta['start_line']}-{meta['end_line']}"
+        if dist is not None:
+            header += f"  (distance {dist:.3f})"
+        print(header)
+        preview_lines = doc.splitlines()[:6]
+        for line in preview_lines:
+            print(f"    {line}")
+        if len(doc.splitlines()) > 6:
+            print(f"    ... ({len(doc.splitlines()) - 6} more lines)")
+        print()
+
+
 def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
     """Drop existing chunks for `rel_path` and re-chunk/embed the current file."""
     root = root.resolve()

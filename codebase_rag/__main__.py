@@ -50,6 +50,22 @@ def main() -> None:
         help="Glob pattern to exclude (matched against relative path and bare filename). Repeatable.",
     )
 
+    p_stats = subparsers.add_parser("stats", help="Show what's currently indexed.")
+    p_stats.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+
+    p_search = subparsers.add_parser(
+        "search", help="Run a one-shot semantic search (what chat retrieval would return)."
+    )
+    p_search.add_argument("query", type=str, help="Search query.")
+    p_search.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_search.add_argument(
+        "--top-k", "-k", type=int, default=5, help="Number of chunks to return (default: 5)."
+    )
+
     p_chat = subparsers.add_parser("chat", help="Start an interactive chat session.")
     p_chat.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
@@ -79,6 +95,10 @@ def main() -> None:
             sys.exit(1)
         index_mod.reset_index(args.db)
         index_mod.build_index(args.path, args.db, extra_excludes=args.exclude)
+    elif args.command == "stats":
+        index_mod.stats(args.db)
+    elif args.command == "search":
+        index_mod.search(args.db, args.query, top_k=args.top_k)
     elif args.command == "chat":
         if not args.db.exists():
             print(
