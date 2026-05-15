@@ -60,14 +60,25 @@ Files already in the index that are now excluded stay there until you `reindex` 
 
 ### Inspecting the index
 
-See what's in there without starting a chat:
+List every project you've indexed:
 
 ```bash
 codebase-rag stats
-# Index:  /Users/you/.codebase-rag/db
-# Chunks: 4231
-# Files:  812
-# Disk:   38.4 MB
+# Database: /Users/you/.codebase-rag/db  (38.4 MB on disk, 2 project(s))
+#
+#   /Users/you/code/project-a
+#     chunks: 4231, files: 812, collection: cbr_you_project_a_4f8a7b3c1d9e
+#   /Users/you/code/project-b
+#     chunks: 1106, files: 245, collection: cbr_you_project_b_a2c98e110f3a
+```
+
+Detail one project:
+
+```bash
+codebase-rag stats --root ~/code/project-a
+# Project: /Users/you/code/project-a
+# Chunks:  4231
+# Files:   812
 #
 # Largest files by chunk count:
 #     47  src/parser.ts
@@ -106,6 +117,8 @@ codebase-rag chat
 > :reset                 # clears conversation history
 > :q                     # quit
 ```
+
+Each indexed project lives in its own ChromaDB collection, keyed by the absolute path you indexed. `chat` (and `search`/`show`) defaults the scope to the current working directory — `cd ~/code/project-a && codebase-rag chat` only retrieves chunks from project-a, never from any other project you've indexed. Use `--root <path>` to talk to a different project's index from somewhere else.
 
 The model has three tools: `read_file`, `write_file`, `edit_file`. It will use them automatically when you ask for changes ("add a test for…", "rename X to Y", "extract this into a helper"). Edits are confined to `--root` (defaults to the current working directory).
 

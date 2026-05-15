@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import re
 from pathlib import Path
 from typing import Iterator, Sequence
 
@@ -13,7 +15,24 @@ from chromadb.config import Settings
 CHROMA_SETTINGS = Settings(anonymized_telemetry=False)
 
 EMBEDDING_MODEL = "nomic-embed-text"
-COLLECTION_NAME = "codebase"
+
+
+def collection_name_for(root: Path) -> str:
+    """Stable per-project collection name derived from the absolute root path."""
+    abs_root = str(root.resolve())
+    digest = hashlib.sha1(abs_root.encode("utf-8")).hexdigest()[:12]
+    last_parts = [p for p in root.resolve().parts[-2:] if p and p != "/"]
+    slug = "_".join(re.sub(r"[^A-Za-z0-9]+", "_", p) for p in last_parts)
+    slug = re.sub(r"_+", "_", slug).strip("_") or "root"
+    name = f"cbr_{slug[:48]}_{digest}"
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name)[:512]
+
+
+def _open_collection(client, root: Path):
+    return client.get_or_create_collection(
+        collection_name_for(root),
+        metadata={"root": str(root.resolve())},
+    )
 
 EXCLUDE_DIRS = {
     ".git", ".svn", ".hg",
@@ -176,78 +195,99 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         return [_embed_one_with_fallback(t) for t in texts]
 
 
-def reset_index(db_path: Path) -> None:
+def reset_index(db_path: Path, root: Path) -> None:
     if not db_path.exists():
         return
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    name = collection_name_for(root)
     try:
-        client.delete_collection(COLLECTION_NAME)
-        print(f"Wiped collection '{COLLECTION_NAME}' at {db_path}.")
+        client.delete_collection(name)
+        print(f"Wiped collection '{name}' for {root.resolve()}.")
     except Exception:
         pass
 
 
-def stats(db_path: Path) -> None:
-    """Print a summary of what's currently indexed."""
-    if not db_path.exists():
-        print(f"No index found at {db_path}.")
-        return
-    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
-    try:
-        collection = client.get_collection(COLLECTION_NAME)
-    except Exception:
-        print(f"No '{COLLECTION_NAME}' collection at {db_path}.")
-        return
-
+def _collection_summary(collection) -> tuple[int, int, list[tuple[str, int]]]:
     total = collection.count()
     result = collection.get(include=["metadatas"])
     metas = result.get("metadatas") or []
-
     files: dict[str, int] = {}
     for meta in metas:
         if not meta:
             continue
         path = meta.get("path", "?")
         files[path] = files.get(path, 0) + 1
-
-    print(f"Index:  {db_path}")
-    print(f"Chunks: {total}")
-    print(f"Files:  {len(files)}")
-
-    try:
-        size = sum(p.stat().st_size for p in db_path.rglob("*") if p.is_file())
-        print(f"Disk:   {size / 1_000_000:.1f} MB")
-    except OSError:
-        pass
-
     top = sorted(files.items(), key=lambda kv: -kv[1])[:15]
-    if top:
-        print("\nLargest files by chunk count:")
-        for path, n in top:
-            print(f"  {n:5d}  {path}")
+    return total, len(files), top
 
 
-def search(
-    db_path: Path,
-    query: str,
-    top_k: int = 5,
-    file_pattern: str | None = None,
-    headers_only: bool = False,
-) -> None:
-    """One-shot semantic search: prints chunks matching the query.
+def stats(db_path: Path, root: Path | None = None) -> None:
+    """Print a summary of indexed projects.
 
-    If `file_pattern` is given, results are filtered to chunks whose path matches
-    the glob (fnmatch). `headers_only` prints only file:line headers without
-    chunk content.
+    With `root`, prints stats for that project's collection only.
+    Without `root`, lists every indexed project in the database.
     """
     if not db_path.exists():
         print(f"No index found at {db_path}.")
         return
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+
+    if root is not None:
+        target_name = collection_name_for(root)
+        try:
+            collection = client.get_collection(target_name)
+        except Exception:
+            print(f"No index for {root.resolve()}. Run `codebase-rag index .` first.")
+            return
+        total, file_count, top = _collection_summary(collection)
+        print(f"Project: {root.resolve()}")
+        print(f"Chunks:  {total}")
+        print(f"Files:   {file_count}")
+        if top:
+            print("\nLargest files by chunk count:")
+            for path, n in top:
+                print(f"  {n:5d}  {path}")
+        return
+
+    collections = client.list_collections()
+    indexed = [c for c in collections if c.name.startswith("cbr_")]
+    if not indexed:
+        print(f"No indexed projects in {db_path}.")
+        return
+
     try:
-        collection = client.get_collection(COLLECTION_NAME)
+        size = sum(p.stat().st_size for p in db_path.rglob("*") if p.is_file())
+        size_str = f"{size / 1_000_000:.1f} MB"
+    except OSError:
+        size_str = "?"
+
+    print(f"Database: {db_path}  ({size_str} on disk, {len(indexed)} project(s))\n")
+
+    for collection in indexed:
+        meta_root = (collection.metadata or {}).get("root", "(unknown root)")
+        total, file_count, _ = _collection_summary(collection)
+        print(f"  {meta_root}")
+        print(f"    chunks: {total}, files: {file_count}, collection: {collection.name}")
+
+
+def search(
+    db_path: Path,
+    query: str,
+    root: Path,
+    top_k: int = 5,
+    file_pattern: str | None = None,
+    headers_only: bool = False,
+) -> None:
+    """One-shot semantic search scoped to `root`'s collection."""
+    if not db_path.exists():
+        print(f"No index found at {db_path}.")
+        return
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    name = collection_name_for(root)
+    try:
+        collection = client.get_collection(name)
     except Exception:
-        print(f"No '{COLLECTION_NAME}' collection at {db_path}.")
+        print(f"No index for {root.resolve()}. Run `codebase-rag index .` first.")
         return
 
     embedding = ollama.embed(
@@ -288,16 +328,17 @@ def search(
             print()
 
 
-def show_file(db_path: Path, file_pattern: str) -> None:
-    """List every chunk for files whose path matches `file_pattern` (glob)."""
+def show_file(db_path: Path, file_pattern: str, root: Path) -> None:
+    """List every chunk for files whose path matches `file_pattern` (glob), within `root`."""
     if not db_path.exists():
         print(f"No index found at {db_path}.")
         return
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    name = collection_name_for(root)
     try:
-        collection = client.get_collection(COLLECTION_NAME)
+        collection = client.get_collection(name)
     except Exception:
-        print(f"No '{COLLECTION_NAME}' collection at {db_path}.")
+        print(f"No index for {root.resolve()}. Run `codebase-rag index .` first.")
         return
 
     result = collection.get(include=["documents", "metadatas"])
@@ -329,7 +370,7 @@ def reindex_file(rel_path: str, root: Path, db_path: Path) -> None:
     root = root.resolve()
     abs_path = root / rel_path
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
-    collection = client.get_or_create_collection(COLLECTION_NAME)
+    collection = _open_collection(client, root)
     collection.delete(where={"path": rel_path})
     if not abs_path.exists() or not abs_path.is_file():
         return
@@ -384,7 +425,8 @@ def build_index(
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
-    collection = client.get_or_create_collection(COLLECTION_NAME)
+    collection = _open_collection(client, root)
+    print(f"Project: {root}  (collection: {collection.name})")
 
     indexed_mtimes = _load_indexed_mtimes(collection)
     user_excludes = tuple(extra_excludes) + tuple(_load_ignore_file(root))

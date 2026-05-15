@@ -8,7 +8,12 @@ from pathlib import Path
 import chromadb
 import ollama
 
-from .index import CHROMA_SETTINGS, COLLECTION_NAME, EMBEDDING_MODEL, reindex_file
+from .index import (
+    CHROMA_SETTINGS,
+    EMBEDDING_MODEL,
+    collection_name_for,
+    reindex_file,
+)
 from .tools import TOOL_SCHEMAS, run_tool
 
 CHAT_MODEL = "mistral-nemo"
@@ -81,12 +86,12 @@ def _assistant_msg_from_response(msg) -> dict:
 def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None:
     root = root.resolve()
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    name = collection_name_for(root)
     try:
-        collection = client.get_collection(COLLECTION_NAME)
+        collection = client.get_collection(name)
     except Exception:
         print(
-            f"No '{COLLECTION_NAME}' collection found at {db_path}. "
-            f"Run `codebase-rag index <path>` first."
+            f"No index for {root}. Run `codebase-rag index .` in this directory first."
         )
         return
 
@@ -98,7 +103,8 @@ def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None
 
     history: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     print(
-        f"Chatting with {CHAT_MODEL}. Root: {root}\n"
+        f"Chatting with {CHAT_MODEL}.\n"
+        f"Project: {root}  (collection: {name})\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history."
     )
 

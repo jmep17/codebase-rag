@@ -50,17 +50,32 @@ def main() -> None:
         help="Glob pattern to exclude (matched against relative path and bare filename). Repeatable.",
     )
 
-    p_stats = subparsers.add_parser("stats", help="Show what's currently indexed.")
+    p_stats = subparsers.add_parser(
+        "stats",
+        help="List indexed projects, or detail one (--root) of them.",
+    )
     p_stats.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
     )
+    p_stats.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="Show stats for a single project root. If omitted, lists all indexed projects.",
+    )
 
     p_search = subparsers.add_parser(
-        "search", help="Run a one-shot semantic search (what chat retrieval would return)."
+        "search", help="Run a one-shot semantic search within a project (default: current directory)."
     )
     p_search.add_argument("query", type=str, help="Search query.")
     p_search.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_search.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root whose index to query (default: current working directory).",
     )
     p_search.add_argument(
         "--top-k", "-k", type=int, default=5, help="Number of chunks to return (default: 5)."
@@ -80,11 +95,18 @@ def main() -> None:
     )
 
     p_show = subparsers.add_parser(
-        "show", help="Print every indexed chunk for files matching a path glob."
+        "show",
+        help="Print every indexed chunk for files matching a path glob within a project.",
     )
     p_show.add_argument("file", type=str, metavar="GLOB", help="Path glob, e.g. 'src/auth.py' or 'src/*.py'.")
     p_show.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_show.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root whose index to query (default: current working directory).",
     )
 
     p_chat = subparsers.add_parser("chat", help="Start an interactive chat session.")
@@ -114,20 +136,27 @@ def main() -> None:
         if not args.path.exists():
             print(f"Path does not exist: {args.path}", file=sys.stderr)
             sys.exit(1)
-        index_mod.reset_index(args.db)
+        index_mod.reset_index(args.db, args.path)
         index_mod.build_index(args.path, args.db, extra_excludes=args.exclude)
     elif args.command == "stats":
-        index_mod.stats(args.db)
+        index_mod.stats(args.db, root=args.root)
     elif args.command == "search":
+        if not args.root.exists():
+            print(f"Root does not exist: {args.root}", file=sys.stderr)
+            sys.exit(1)
         index_mod.search(
             args.db,
             args.query,
+            root=args.root.resolve(),
             top_k=args.top_k,
             file_pattern=args.file,
             headers_only=args.headers_only,
         )
     elif args.command == "show":
-        index_mod.show_file(args.db, args.file)
+        if not args.root.exists():
+            print(f"Root does not exist: {args.root}", file=sys.stderr)
+            sys.exit(1)
+        index_mod.show_file(args.db, args.file, root=args.root.resolve())
     elif args.command == "chat":
         if not args.db.exists():
             print(
