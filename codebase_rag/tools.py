@@ -64,12 +64,45 @@ def write_file(root: Path, path: str, content: str, on_change: Callable[[str], N
     }
 
 
-def grep(root: Path, pattern: str, file_glob: str | None = None) -> dict:
-    """Regex-search every source file under `root`. Returns up to GREP_MAX_RESULTS matches."""
+def _clean_pattern(pattern: str) -> str:
+    """Strip common wrapper noise the model emits around regex strings."""
+    p = pattern.strip()
+    # Strip Python raw-string prefix: r"..." or r'...'
+    if len(p) >= 3 and p[0] in ("r", "R") and p[1] in ("'", '"') and p[-1] == p[1]:
+        return p[2:-1]
+    # Strip a single pair of surrounding quotes
+    if len(p) >= 2 and p[0] in ("'", '"') and p[-1] == p[0]:
+        return p[1:-1]
+    return p
+
+
+def grep(
+    root: Path,
+    pattern: str,
+    file_glob: str | None = None,
+    literal: bool = False,
+) -> dict:
+    """Regex-search every source file under `root`. Returns up to GREP_MAX_RESULTS matches.
+
+    If `literal` is true, `pattern` is matched as plain text (no regex parsing).
+    """
+    cleaned = _clean_pattern(pattern)
+    if not cleaned:
+        return {"ok": False, "error": "empty pattern"}
+    effective = re.escape(cleaned) if literal else cleaned
     try:
-        regex = re.compile(pattern)
+        regex = re.compile(effective)
     except re.error as e:
-        return {"ok": False, "error": f"invalid regex: {e}"}
+        return {
+            "ok": False,
+            "error": f"invalid regex: {e}",
+            "pattern_attempted": effective,
+            "hint": (
+                "If you wanted to match the pattern as plain text (not a regex), "
+                "retry with literal=true. Otherwise, escape regex metacharacters: "
+                "( ) [ ] { } . * + ? | \\ ^ $"
+            ),
+        }
 
     root = root.resolve()
     user_excludes = tuple(_load_ignore_file(root))
@@ -200,11 +233,12 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "grep",
             "description": (
-                "Regex-search every source file in the project. Use this for exhaustive "
-                "queries — 'list every X', 'find all usages of Y', 'where is Z imported' — "
-                "where the retrieved Context block alone is not enough. Returns each match "
-                "with path, line number, and the matched line. Respects the project's "
-                "exclude rules and skips nested git repos."
+                "Search every source file in the project. Use for exhaustive queries: "
+                "'list every X', 'find all usages of Y', 'where is Z imported'. "
+                "Returns matches with path, line number, and the matched line. "
+                "Default mode is regex (Python re syntax). Pass literal=true to match the "
+                "pattern as plain text — easier and safer for paths, URLs, identifiers, or "
+                "any string with special characters."
             ),
             "parameters": {
                 "type": "object",
@@ -212,15 +246,25 @@ TOOL_SCHEMAS = [
                     "pattern": {
                         "type": "string",
                         "description": (
-                            "Python regex. Use alternation for variants, e.g. "
-                            "'fetch\\\\(|axios\\\\.|http\\\\.(get|post)'."
+                            "What to search for. Just the pattern — do not wrap in r\"...\" "
+                            "or quotes. Regex examples (literal=false): 'useEffect', "
+                            "'fetch|axios', 'use[A-Z]\\w+'. For plain-text searches "
+                            "(literal=true): 'api/v1/users', '@deprecated'."
                         ),
                     },
                     "file_glob": {
                         "type": "string",
                         "description": (
-                            "Optional glob filter (matches the relative path or filename), "
-                            "e.g. 'src/**/*.ts' or '*.py'."
+                            "Optional glob, matched against the relative path or filename. "
+                            "Examples: '*.py', 'src/**/*.ts', 'package.json'."
+                        ),
+                    },
+                    "literal": {
+                        "type": "boolean",
+                        "description": (
+                            "If true, treat pattern as plain text (regex metacharacters are "
+                            "auto-escaped). Default false. Use this when you don't need "
+                            "regex features and the pattern contains ( ) . * + ? etc."
                         ),
                     },
                 },
