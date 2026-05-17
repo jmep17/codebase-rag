@@ -426,6 +426,18 @@ def _resolve_model(model: str | None) -> str:
     return model or os.environ.get("CODEBASE_RAG_CHAT_MODEL") or CHAT_MODEL
 
 
+ARCHITECT_SYSTEM_ADDENDUM = """
+
+You are operating in ARCHITECT mode. You do NOT have tools — your job is to read the user's question and the retrieved Context, then write a short plan for the next agent (the "coder") to execute. Output format:
+
+  1. <step description, e.g. "Read codebase_rag/auth.py to inspect parse_token">
+  2. <next step>
+  3. ...
+
+Be concrete: name files, name functions, name what to look for. Do not write code. Do not pretend to call tools. Do not narrate "I will now do X" — write the imperative step list. Keep it under 10 steps. If the question is purely informational and needs no actions, output a single step: "1. Answer the question directly using the retrieved Context."
+"""
+
+
 def agent_loop(
     db_path: Path,
     root: Path,
@@ -444,6 +456,7 @@ def agent_loop(
     web_allow: tuple[str, ...] = (),
     web_block: tuple[str, ...] = (),
     searxng_url: str = "",
+    architect_model: str | None = None,
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
@@ -482,6 +495,7 @@ def agent_loop(
         web_allow=list(web_allow),
         web_block=list(web_block),
         searxng_url=searxng_url if allow_web else "",
+        architect_model=architect_model or "",
     )
 
     touched_files: set[str] = set()
@@ -524,8 +538,11 @@ def agent_loop(
     if allow_web:
         allow_desc = ",".join(web_allow) if web_allow else "any host"
         web_marker = f"  [web: search via {searxng_url or 'unset'}, fetch hosts: {allow_desc}]"
+    arch_marker = ""
+    if architect_model:
+        arch_marker = f"  [architect: {architect_model} -> coder: {chat_model}]"
     print(
-        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}\n"
+        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}\n"
         f"Project: {root}  (collection: {name}, {notes_marker})"
         f"{resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -857,6 +874,45 @@ def agent_loop(
         total_prompt_tokens = 0
         total_output_tokens = 0
         inferences = 0
+
+        if architect_model:
+            # Architect runs first: same context, no tools, produces a plan.
+            print(f"  [architect ({architect_model}) thinking…]")
+            architect_history = list(history)
+            architect_history[0] = {
+                "role": "system",
+                "content": history[0]["content"] + ARCHITECT_SYSTEM_ADDENDUM,
+            }
+            try:
+                arch_content, _arch_tool_calls, arch_stats = _stream_inference(
+                    architect_model,
+                    architect_history,
+                    [],
+                    CHAT_OPTIONS,
+                    verbose=verbose,
+                )
+            except ollama.ResponseError as e:
+                print(f"  (architect error: {e}; falling back to single-model flow)")
+                arch_content = ""
+                arch_stats = {"prompt_tokens": 0, "output_tokens": 0}
+            inferences += 1
+            total_prompt_tokens += arch_stats["prompt_tokens"]
+            total_output_tokens += arch_stats["output_tokens"]
+            if arch_content and arch_content.strip():
+                last = history[-1]
+                history[-1] = {
+                    "role": last.get("role", "user"),
+                    "content": (
+                        (last.get("content") or "")
+                        + "\n\n---\n\n## Architect plan\n\n"
+                        + arch_content.strip()
+                    ),
+                }
+                audit.log_event(
+                    meta_dir, session, "architect_plan",
+                    model=architect_model,
+                    plan_len=len(arch_content.strip()),
+                )
 
         for turn in range(MAX_TURNS):
             inferences += 1

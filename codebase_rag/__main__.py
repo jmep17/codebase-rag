@@ -318,6 +318,18 @@ def main() -> None:
         metavar="HOST_GLOB",
         help="Host glob to block for web_fetch (repeatable). Blocklist takes precedence over allowlist.",
     )
+    p_chat.add_argument(
+        "--architect-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Enable architect-coder split. The architect (this model) sees the same "
+            "retrieved context and produces a numbered plan; the coder (--model) then "
+            "executes via tool calls. Useful pairing: --architect-model qwen3:30b-a3b "
+            "--model qwen2.5-coder:7b. Default off (single-model flow)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -411,6 +423,7 @@ def main() -> None:
             web_allow=tuple(args.web_allow),
             web_block=tuple(args.web_block),
             searxng_url=searxng_url,
+            architect_model=args.architect_model,
         )
 
 
