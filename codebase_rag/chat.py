@@ -24,7 +24,7 @@ MAX_TURNS = 20
 CHAT_OPTIONS = {
     "num_ctx": 65536,
     "num_predict": -1,
-    "temperature": 0.1,
+    "temperature": 0.0,
 }
 
 SYSTEM_PROMPT = """You are a coding assistant for the user's local codebase.
@@ -39,13 +39,20 @@ Every user turn also includes a "Context from codebase" block with retrieved chu
 
 Calling grep correctly:
 - `pattern` is the search string only. Do not wrap it in `r"..."`, quotes, or `re.compile(...)`. Just the pattern.
+- Choose precise patterns. To find function definitions in Python use `^def\\s+\\w+`; the bare string `def` will also match `default`, `defer`, `define`, etc. and produce false positives. Anchor with `^`, use word boundaries `\\b`, require word characters `\\w+` when you mean identifiers.
 - If you want a plain-text search (no regex features), set `literal=true`. This is the safer default for paths, URLs, identifiers, or anything with `( ) . * + ?` in it.
 - If a grep call returns `{"ok": false, "error": "invalid regex: ..."}`, do not give up and do not print Python code. Retry: either pass `literal=true`, or rewrite the pattern with proper escaping (`\\(` for a literal paren, `\\.` for a literal dot).
 - If grep returns 23 matches, your answer must cover 23, not 5. If grep returns 0, say "no matches" — never invent.
 
+Anti-hallucination rules (read these every time before answering):
+- Every file path, function name, identifier, or line you cite must come directly from a tool result, a retrieved chunk, or text the user provided. If you cannot point to where you saw it, do not write it.
+- When listing items from a tool result, copy each entry verbatim from the result. Do not paraphrase, summarise, normalise capitalisation, or invent.
+- The number of items in your answer must equal the number of items visible in the tool result. If you can only see 14 items in the matches array, list 14 — even if `match_count` says more. Never pad to reach a target number with made-up entries.
+- Never abbreviate a list. Do not write "... (remaining items follow)", "...etc", "(and so on)", or any similar shortcut. Either list every entry or explain why you cannot and ask the user how to narrow it down.
+- If you find yourself making up a name, path, or identifier to fill out a list or to keep talking, stop and either call another tool or report what you actually have.
+
 Strict rules:
 - For exhaustive queries, call grep first. Retrieval alone is incomplete.
-- Every file path or symbol you cite must come from a tool result, a retrieved chunk, or a clearly user-provided string. Do not invent paths, function names, or routes.
 - For any file change, emit a real tool call. Never describe a change you "would make" — either do it or ask a question.
 - Before edit_file, call read_file first to copy the exact target text. old_string must appear once and match character-for-character including whitespace.
 - write_file content must be complete. Never use placeholders like "...", "[rest omitted]", "// continues", or "// ... existing code ...".

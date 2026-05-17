@@ -238,7 +238,11 @@ TOOL_SCHEMAS = [
                 "Returns matches with path, line number, and the matched line. "
                 "Default mode is regex (Python re syntax). Pass literal=true to match the "
                 "pattern as plain text — easier and safer for paths, URLs, identifiers, or "
-                "any string with special characters."
+                "any string with special characters. "
+                "Use precise patterns: '^def\\\\s+\\\\w+' for Python function defs (not just "
+                "'def', which matches 'default', 'defer', etc.); '^\\\\s*async\\\\s+def' for "
+                "async defs; '\\\\bclass\\\\s+\\\\w+' for class definitions. Anchor with ^ and "
+                "use \\\\b/\\\\w+ when you mean identifiers, not substrings."
             ),
             "parameters": {
                 "type": "object",
