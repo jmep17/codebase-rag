@@ -13,6 +13,9 @@ web = [
     "httpx>=0.27",
     "trafilatura>=2.0",
 ]
+cloud = [
+    "anthropic>=0.45",
+]
 
 [project.scripts]
 codebase-rag = "codebase_rag.__main__:main"

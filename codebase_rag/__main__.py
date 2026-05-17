@@ -330,6 +330,17 @@ def main() -> None:
             "--model qwen2.5-coder:7b. Default off (single-model flow)."
         ),
     )
+    p_chat.add_argument(
+        "--provider",
+        type=str,
+        default="ollama",
+        choices=["ollama", "anthropic"],
+        help=(
+            "Chat provider. 'ollama' (default) runs against the local Ollama daemon. "
+            "'anthropic' calls api.anthropic.com — requires `pip install -e .[cloud]` "
+            "and ANTHROPIC_API_KEY env var. Embeddings stay on Ollama regardless."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -406,6 +417,16 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        api_key = None
+        if args.provider == "anthropic":
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                print(
+                    "error: --provider anthropic requires ANTHROPIC_API_KEY env var.\n"
+                    "  Get one at https://console.anthropic.com",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
         chat_mod.agent_loop(
             args.db,
             root=args.root.resolve(),
@@ -424,6 +445,8 @@ def main() -> None:
             web_block=tuple(args.web_block),
             searxng_url=searxng_url,
             architect_model=args.architect_model,
+            provider_name=args.provider,
+            api_key=api_key,
         )
 
 

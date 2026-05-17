@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from . import audit
 from . import gitops
+from . import providers
 from .index import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL,
@@ -353,6 +354,7 @@ def _assistant_msg_from_response(msg) -> dict:
 
 
 def _stream_inference(
+    provider: providers.ChatProvider,
     model: str,
     messages: list,
     tools: list,
@@ -360,51 +362,23 @@ def _stream_inference(
     *,
     verbose: bool,
 ) -> tuple[str, list, dict]:
-    """Stream a chat call; print content as it arrives. Return (content, tool_calls, stats)."""
-    t0 = time.time()
-    content = ""
-    tool_calls: list = []
-    last_chunk = None
-    for chunk in ollama.chat(
-        model=model,
-        messages=messages,
-        tools=tools,
-        options=options,
-        stream=True,
-    ):
-        msg = chunk.get("message") or {}
-        piece = msg.get("content") or ""
-        if piece:
-            print(piece, end="", flush=True)
-            content += piece
-        tcs = msg.get("tool_calls") or []
-        if tcs:
-            tool_calls.extend(tcs)
-        last_chunk = chunk
-    elapsed = time.time() - t0
-    if content and not content.endswith("\n"):
-        print()
-    stats = {
-        "elapsed": elapsed,
-        "prompt_tokens": (last_chunk or {}).get("prompt_eval_count") or 0,
-        "output_tokens": (last_chunk or {}).get("eval_count") or 0,
-        "prompt_eval_duration": ((last_chunk or {}).get("prompt_eval_duration") or 0) / 1e9,
-        "eval_duration": ((last_chunk or {}).get("eval_duration") or 0) / 1e9,
-        "load_duration": ((last_chunk or {}).get("load_duration") or 0) / 1e9,
-    }
+    """Run one streaming inference through the configured provider. Print stats line."""
+    content, tool_calls, stats = provider.stream_chat(
+        model, messages, tools, options, verbose=verbose,
+    )
     if verbose:
-        prompt_rate = stats["prompt_tokens"] / stats["prompt_eval_duration"] if stats["prompt_eval_duration"] else 0
-        gen_rate = stats["output_tokens"] / stats["eval_duration"] if stats["eval_duration"] else 0
-        load_note = f", load {stats['load_duration']:.1f}s" if stats["load_duration"] > 0.05 else ""
+        prompt_rate = stats["prompt_tokens"] / stats["prompt_eval_duration"] if stats.get("prompt_eval_duration") else 0
+        gen_rate = stats["output_tokens"] / stats["eval_duration"] if stats.get("eval_duration") else 0
+        load_note = f", load {stats['load_duration']:.1f}s" if stats.get("load_duration", 0) > 0.05 else ""
         print(
-            f"  [{stats['elapsed']:.1f}s · prompt {stats['prompt_tokens']} tok "
-            f"in {stats['prompt_eval_duration']:.2f}s ({prompt_rate:.0f} tok/s) · "
-            f"gen {stats['output_tokens']} tok in {stats['eval_duration']:.2f}s "
+            f"  [{provider.name}] [{stats['elapsed']:.1f}s · prompt {stats['prompt_tokens']} tok "
+            f"in {stats.get('prompt_eval_duration', 0):.2f}s ({prompt_rate:.0f} tok/s) · "
+            f"gen {stats['output_tokens']} tok in {stats.get('eval_duration', 0):.2f}s "
             f"({gen_rate:.0f} tok/s){load_note}]"
         )
     else:
         print(
-            f"  [{stats['elapsed']:.1f}s · {stats['prompt_tokens']} in → "
+            f"  [{provider.name}] [{stats['elapsed']:.1f}s · {stats['prompt_tokens']} in → "
             f"{stats['output_tokens']} out]"
         )
     return content, tool_calls, stats
@@ -457,9 +431,22 @@ def agent_loop(
     web_block: tuple[str, ...] = (),
     searxng_url: str = "",
     architect_model: str | None = None,
+    provider_name: str = "ollama",
+    api_key: str | None = None,
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
+    try:
+        provider = providers.make_provider(provider_name, api_key=api_key)
+    except (providers.ProviderUnavailable, ValueError) as e:
+        print(f"error: {e}")
+        return
+    if provider_name == "anthropic":
+        print(
+            "⚠ Provider: anthropic — chat content WILL leave your machine "
+            "(messages, retrieved chunks, tool args → api.anthropic.com).\n"
+            "  Embeddings remain local via Ollama. Ctrl-C now if this is the wrong choice."
+        )
     meta_dir = project_meta_dir(root)
     session = uuid.uuid4().hex[:8]
     tool_schemas = tool_schemas_for(
@@ -486,6 +473,7 @@ def agent_loop(
 
     audit.log_event(
         meta_dir, session, "session_start",
+        provider=provider_name,
         model=chat_model, root=str(root), collection=name,
         show_context=show_context, verbose=verbose, resume=resume,
         read_only=read_only, allow_shell=allow_shell, shell_timeout=shell_timeout,
@@ -541,8 +529,9 @@ def agent_loop(
     arch_marker = ""
     if architect_model:
         arch_marker = f"  [architect: {architect_model} -> coder: {chat_model}]"
+    provider_marker = f"  [provider: {provider_name}]" if provider_name != "ollama" else ""
     print(
-        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}\n"
+        f"Chatting with {chat_model}.{provider_marker}{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}\n"
         f"Project: {root}  (collection: {name}, {notes_marker})"
         f"{resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -885,13 +874,14 @@ def agent_loop(
             }
             try:
                 arch_content, _arch_tool_calls, arch_stats = _stream_inference(
+                    provider,
                     architect_model,
                     architect_history,
                     [],
                     CHAT_OPTIONS,
                     verbose=verbose,
                 )
-            except ollama.ResponseError as e:
+            except Exception as e:
                 print(f"  (architect error: {e}; falling back to single-model flow)")
                 arch_content = ""
                 arch_stats = {"prompt_tokens": 0, "output_tokens": 0}
@@ -918,6 +908,7 @@ def agent_loop(
             inferences += 1
             try:
                 content, tool_calls, stats = _stream_inference(
+                    provider,
                     chat_model,
                     history,
                     tool_schemas,
