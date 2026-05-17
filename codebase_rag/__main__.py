@@ -258,6 +258,16 @@ def main() -> None:
         metavar="SECONDS",
         help="Per-command timeout for run_shell / :run (default: 30 seconds).",
     )
+    p_chat.add_argument(
+        "--confirm-writes",
+        action="store_true",
+        help=(
+            "Prompt before every model-driven write_file or edit_file. Shows a "
+            "preview (truncated diff for edits, first 15 lines for writes); 'd' or "
+            "'f' reveal the full version. Useful for first-time chats against "
+            "unfamiliar code, or as a guardrail against prompt injection."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -335,6 +345,7 @@ def main() -> None:
             read_only=args.read_only,
             allow_shell=args.allow_shell,
             shell_timeout=args.shell_timeout,
+            confirm_writes=args.confirm_writes,
         )
 
 

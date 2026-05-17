@@ -69,6 +69,63 @@ def _load_conversation(root: Path) -> dict | None:
         return None
 
 
+def _confirm_write(tname: str, args: dict) -> dict | None:
+    """Prompt the user before letting the model write_file or edit_file."""
+    while True:
+        if tname == "edit_file":
+            path = args.get("path", "?")
+            old = args.get("old_string", "") or ""
+            new = args.get("new_string", "") or ""
+            print(f"  [model wants to edit {path}]")
+            old_lines = old.splitlines() or [""]
+            new_lines = new.splitlines() or [""]
+            for ln in old_lines[:8]:
+                print(f"    - {ln}")
+            if len(old_lines) > 8:
+                print(f"    - ... ({len(old_lines) - 8} more)")
+            for ln in new_lines[:8]:
+                print(f"    + {ln}")
+            if len(new_lines) > 8:
+                print(f"    + ... ({len(new_lines) - 8} more)")
+            choices = "[y/N/d (full diff)]"
+        elif tname == "write_file":
+            path = args.get("path", "?")
+            content = args.get("content", "") or ""
+            lines = content.splitlines() or [""]
+            size = len(content.encode("utf-8"))
+            print(f"  [model wants to write {path} — {len(lines)} lines, {size} bytes]")
+            for i, ln in enumerate(lines[:15], 1):
+                print(f"    {i:4d}: {ln}")
+            if len(lines) > 15:
+                print(f"    ... ({len(lines) - 15} more lines)")
+            choices = "[y/N/f (full)]"
+        else:
+            return args
+        try:
+            ans = input(f"    Apply? {choices} ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if ans in ("y", "yes"):
+            return args
+        if ans in ("d", "diff") and tname == "edit_file":
+            import difflib
+            for line in difflib.unified_diff(
+                old.splitlines(),
+                new.splitlines(),
+                lineterm="",
+                fromfile=f"{args['path']} (current)",
+                tofile=f"{args['path']} (proposed)",
+            ):
+                print(f"    {line}")
+            continue
+        if ans in ("f", "full") and tname == "write_file":
+            for i, ln in enumerate(content.splitlines(), 1):
+                print(f"    {i:4d}: {ln}")
+            continue
+        return None
+
+
 def _confirm_shell(args: dict) -> dict | None:
     """Prompt the user before letting the model run a shell command.
 
@@ -380,6 +437,7 @@ def agent_loop(
     read_only: bool = False,
     allow_shell: bool = False,
     shell_timeout: float = 30,
+    confirm_writes: bool = False,
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
@@ -401,6 +459,7 @@ def agent_loop(
         model=chat_model, root=str(root), collection=name,
         show_context=show_context, verbose=verbose, resume=resume,
         read_only=read_only, allow_shell=allow_shell, shell_timeout=shell_timeout,
+        confirm_writes=confirm_writes,
     )
 
     touched_files: set[str] = set()
@@ -436,8 +495,9 @@ def agent_loop(
     shell_marker = ""
     if allow_shell and not read_only:
         shell_marker = "  [shell: run_shell tool enabled, host runner, user-confirmed]"
+    confirm_marker = "  [confirm-writes: every write/edit asks first]" if confirm_writes else ""
     print(
-        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}\n"
+        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}\n"
         f"Project: {root}  (collection: {name}, {notes_marker})"
         f"{resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -758,24 +818,30 @@ def agent_loop(
                         args = {}
                 audit.log_event(meta_dir, session, "tool_call", tool=tname, args=args)
                 # Model-driven shell calls require explicit user confirmation.
+                # Model-driven writes/edits do too when --confirm-writes is set.
+                confirmation: dict | None = args
                 if tname == "run_shell":
                     confirmation = _confirm_shell(args)
-                    if confirmation is None:
-                        # User declined or aborted; synthesize a tool result and continue.
-                        declined = {"ok": False, "error": "user declined to run command",
-                                    "command": args.get("command", "")}
-                        result = json.dumps(declined)
-                        tool_elapsed = 0.0
-                        audit.log_event(
-                            meta_dir, session, "tool_result",
-                            tool=tname, duration_s=0.0, result=declined,
-                        )
-                        preview = result if verbose else result[:200]
-                        print(f"  -> {tname} (declined by user)")
-                        print(f"     {preview}")
-                        history.append({"role": "tool", "content": result})
-                        continue
-                    args = confirmation
+                elif confirm_writes and tname in ("write_file", "edit_file"):
+                    confirmation = _confirm_write(tname, args)
+                if confirmation is None:
+                    declined = {
+                        "ok": False,
+                        "error": f"user declined to {tname}",
+                        **({"command": args.get("command", "")} if tname == "run_shell" else {}),
+                        **({"path": args.get("path", "")} if tname in ("write_file", "edit_file") else {}),
+                    }
+                    result = json.dumps(declined)
+                    audit.log_event(
+                        meta_dir, session, "tool_result",
+                        tool=tname, duration_s=0.0, result=declined,
+                    )
+                    preview = result if verbose else result[:200]
+                    print(f"  -> {tname} (declined by user)")
+                    print(f"     {preview}")
+                    history.append({"role": "tool", "content": result})
+                    continue
+                args = confirmation
                 tool_t0 = time.time()
                 result = run_tool(tname, args, root, on_change, shell_timeout=shell_timeout)
                 tool_elapsed = time.time() - tool_t0
