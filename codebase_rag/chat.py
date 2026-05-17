@@ -1,8 +1,9 @@
-"""Agent loop with mistral-nemo: RAG retrieval + file-editing tool calls."""
+"""Agent loop with a configurable chat model: RAG retrieval + file-editing tool calls."""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import chromadb
@@ -17,6 +18,10 @@ from .index import (
 )
 from .tools import TOOL_SCHEMAS, run_tool
 
+# Default chat model, overridable per call. Resolution order:
+#   1. `agent_loop(..., model=...)` argument
+#   2. `CODEBASE_RAG_CHAT_MODEL` env var
+#   3. This constant
 CHAT_MODEL = "mistral-nemo"
 TOP_K = 5
 MAX_TURNS = 20
@@ -137,8 +142,19 @@ def _system_prompt_for(root: Path) -> str:
     )
 
 
-def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None:
+def _resolve_model(model: str | None) -> str:
+    return model or os.environ.get("CODEBASE_RAG_CHAT_MODEL") or CHAT_MODEL
+
+
+def agent_loop(
+    db_path: Path,
+    root: Path,
+    *,
+    show_context: bool = False,
+    model: str | None = None,
+) -> None:
     root = root.resolve()
+    chat_model = _resolve_model(model)
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     name = collection_name_for(root)
     try:
@@ -159,7 +175,7 @@ def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None
     history: list[dict] = [{"role": "system", "content": system_prompt}]
     notes_marker = "with notes" if read_notes(root).strip() else "no notes"
     print(
-        f"Chatting with {CHAT_MODEL}.\n"
+        f"Chatting with {chat_model}.\n"
         f"Project: {root}  (collection: {name}, {notes_marker})\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history."
     )
@@ -196,7 +212,7 @@ def agent_loop(db_path: Path, root: Path, *, show_context: bool = False) -> None
         for turn in range(MAX_TURNS):
             try:
                 response = ollama.chat(
-                    model=CHAT_MODEL,
+                    model=chat_model,
                     messages=history,
                     tools=TOOL_SCHEMAS,
                     options=CHAT_OPTIONS,

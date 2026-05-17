@@ -184,6 +184,16 @@ def main() -> None:
         help="Root directory the model may read/write via tools (default: current working directory).",
     )
     p_chat.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help=(
+            "Ollama chat model to use. Overrides the CODEBASE_RAG_CHAT_MODEL env var "
+            "and the built-in default (mistral-nemo). Examples: qwen3:8b, "
+            "qwen2.5-coder:32b, llama3.3:70b."
+        ),
+    )
+    p_chat.add_argument(
         "--show-context",
         action="store_true",
         help="Print the file paths and line ranges retrieved for each question.",
@@ -254,7 +264,10 @@ def main() -> None:
             print(f"Root does not exist: {args.root}", file=sys.stderr)
             sys.exit(1)
         chat_mod.agent_loop(
-            args.db, root=args.root.resolve(), show_context=args.show_context
+            args.db,
+            root=args.root.resolve(),
+            show_context=args.show_context,
+            model=args.model,
         )
 
 
