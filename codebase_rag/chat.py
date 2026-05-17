@@ -14,6 +14,7 @@ import ollama
 from datetime import datetime, timezone
 
 from . import audit
+from . import gitops
 from .index import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL,
@@ -65,6 +66,18 @@ def _load_conversation(root: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _last_assistant_summary(history: list[dict]) -> str:
+    """Pull a one-line commit subject from the most recent assistant message."""
+    for msg in reversed(history):
+        if msg.get("role") == "assistant":
+            content = (msg.get("content") or "").strip()
+            if not content:
+                continue
+            first_line = content.splitlines()[0].strip().lstrip("#*-_ ").strip()
+            return first_line[:72] if first_line else "agent edit"
+    return "agent edit"
 
 
 def _clear_conversation(root: Path) -> None:
@@ -359,7 +372,10 @@ def agent_loop(
         read_only=read_only,
     )
 
+    touched_files: set[str] = set()
+
     def on_change(rel_path: str) -> None:
+        touched_files.add(rel_path)
         try:
             reindex_file(rel_path, root, db_path)
         except Exception as e:
@@ -385,8 +401,9 @@ def agent_loop(
             resumed_marker = "\n(--resume requested but no saved conversation found)"
     notes_marker = "with notes" if read_notes(root).strip() else "no notes"
     read_only_marker = "  [READ-ONLY: write/edit tools disabled]" if read_only else ""
+    git_marker = "  [git: review-then-commit]" if gitops.is_git_repo(root) else ""
     print(
-        f"Chatting with {chat_model}.{read_only_marker}\n"
+        f"Chatting with {chat_model}.{read_only_marker}{git_marker}\n"
         f"Project: {root}  (collection: {name}, {notes_marker})"
         f"{resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -488,6 +505,91 @@ def agent_loop(
             print(f"(:dropall: removed {count} pinned files)")
             audit.log_event(meta_dir, session, "slash_command", command="dropall")
             _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            continue
+        if user_input == ":gitstatus":
+            if not gitops.is_git_repo(root):
+                print(":gitstatus requires a git repo at the project root")
+            else:
+                out = gitops.status_short(root)
+                print(out if out.strip() else "(working tree clean)")
+            audit.log_event(meta_dir, session, "slash_command", command="gitstatus")
+            continue
+        if user_input.startswith(":diff"):
+            arg = user_input[len(":diff"):].strip() or None
+            if not gitops.is_git_repo(root):
+                print(":diff requires a git repo at the project root")
+            else:
+                d = gitops.pending_diff(root, arg)
+                print(d if d.strip() else "(no pending changes)")
+            audit.log_event(meta_dir, session, "slash_command", command="diff", arg=arg or "")
+            continue
+        if user_input.startswith(":commit"):
+            arg = user_input[len(":commit"):].strip()
+            if not gitops.is_git_repo(root):
+                print(":commit requires a git repo at the project root")
+                audit.log_event(meta_dir, session, "slash_command", command="commit", error="not a git repo")
+                continue
+            if not gitops.has_pending_changes(root):
+                print("(nothing to commit; working tree is clean)")
+                audit.log_event(meta_dir, session, "slash_command", command="commit", error="clean tree")
+                continue
+            if not touched_files:
+                print(
+                    "(no model edits this session; refusing to commit user changes — "
+                    "use plain `git commit` for those)"
+                )
+                audit.log_event(meta_dir, session, "slash_command", command="commit", error="no touched files")
+                continue
+            paths_to_stage = sorted(touched_files)
+            stat = gitops.diff_stat(root, paths_to_stage)
+            if stat.strip():
+                print(stat.rstrip("\n"))
+            else:
+                print("(touched files appear unchanged on disk — model edits may have been reverted)")
+            message = arg or _last_assistant_summary(history)
+            try:
+                ans = input(f"Commit as '{gitops.COMMIT_TAG} {message}'? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                ans = "n"
+                print()
+            if ans and ans not in ("y", "yes"):
+                print("(aborted)")
+                audit.log_event(meta_dir, session, "slash_command", command="commit", aborted=True)
+                continue
+            result = gitops.commit_pending(root, message, paths=paths_to_stage)
+            if result["ok"]:
+                print(f"  Committed {result['short']} ({len(result['files'])} file(s))")
+                touched_files.clear()
+            else:
+                print(f"  Commit failed: {result['error']}")
+            audit.log_event(meta_dir, session, "slash_command", command="commit", result=result)
+            continue
+        if user_input == ":undo":
+            if not gitops.is_git_repo(root):
+                print(":undo requires a git repo at the project root")
+                continue
+            last = gitops.last_codebase_rag_commit(root)
+            if last is None:
+                print("(no [codebase-rag] commits found in history)")
+                audit.log_event(meta_dir, session, "slash_command", command="undo", error="none found")
+                continue
+            print(f"Last codebase-rag commit: {last['short']} — {last['subject']}")
+            print(f"Files: {', '.join(last['files']) if last['files'] else '(none)'}")
+            try:
+                ans = input("Revert this commit? [y/N] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                ans = "n"
+                print()
+            if ans not in ("y", "yes"):
+                print("(aborted)")
+                audit.log_event(meta_dir, session, "slash_command", command="undo", aborted=True)
+                continue
+            result = gitops.undo_last(root)
+            if result["ok"]:
+                print(f"  Reverted {result['reverted_sha']} via {result['revert_sha']}")
+            else:
+                print(f"  Undo failed: {result['error']}")
+            audit.log_event(meta_dir, session, "slash_command", command="undo", result=result)
             continue
         if user_input == ":pinned":
             if not pinned_paths:
