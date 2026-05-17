@@ -437,6 +437,8 @@ def agent_loop(
     read_only: bool = False,
     allow_shell: bool = False,
     shell_timeout: float = 30,
+    shell_runner: str = "host",
+    shell_network: str = "none",
     confirm_writes: bool = False,
 ) -> None:
     root = root.resolve()
@@ -459,6 +461,7 @@ def agent_loop(
         model=chat_model, root=str(root), collection=name,
         show_context=show_context, verbose=verbose, resume=resume,
         read_only=read_only, allow_shell=allow_shell, shell_timeout=shell_timeout,
+        shell_runner=shell_runner, shell_network=shell_network,
         confirm_writes=confirm_writes,
     )
 
@@ -494,7 +497,9 @@ def agent_loop(
     git_marker = "  [git: review-then-commit]" if gitops.is_git_repo(root) else ""
     shell_marker = ""
     if allow_shell and not read_only:
-        shell_marker = "  [shell: run_shell tool enabled, host runner, user-confirmed]"
+        runner_desc = "host" if shell_runner == "host" else shell_runner
+        net_desc = "" if shell_runner == "host" else f", network={shell_network}"
+        shell_marker = f"  [shell: enabled, runner={runner_desc}{net_desc}, user-confirmed]"
     confirm_marker = "  [confirm-writes: every write/edit asks first]" if confirm_writes else ""
     print(
         f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}\n"
@@ -609,8 +614,10 @@ def agent_loop(
             if not cmd:
                 print(":run usage: :run <command>")
                 continue
-            audit.log_event(meta_dir, session, "slash_command", command="run", arg=cmd)
-            result_dict = run_shell(root, cmd, timeout=shell_timeout)
+            audit.log_event(meta_dir, session, "slash_command", command="run", arg=cmd, runner=shell_runner)
+            result_dict = run_shell(
+                root, cmd, timeout=shell_timeout, runner=shell_runner, shell_network=shell_network,
+            )
             audit.log_event(
                 meta_dir, session, "tool_result",
                 tool="run_shell", duration_s=result_dict.get("duration_s"),
@@ -843,7 +850,12 @@ def agent_loop(
                     continue
                 args = confirmation
                 tool_t0 = time.time()
-                result = run_tool(tname, args, root, on_change, shell_timeout=shell_timeout)
+                result = run_tool(
+                    tname, args, root, on_change,
+                    shell_timeout=shell_timeout,
+                    shell_runner=shell_runner,
+                    shell_network=shell_network,
+                )
                 tool_elapsed = time.time() - tool_t0
                 try:
                     parsed = json.loads(result)

@@ -186,28 +186,17 @@ def _cap_output(text: str) -> tuple[str, bool]:
     return text, False
 
 
-def run_shell(root: Path, command: str, *, timeout: float = 30) -> dict:
-    """Execute `command` in `root` with no shell expansion and a scrubbed env.
-
-    `command` is parsed via shlex.split so model content cannot trigger shell
-    metacharacters ($VAR, backticks, pipes, redirection). For multi-step flows
-    the model should issue multiple `run_shell` calls.
-    """
-    try:
-        argv = shlex.split(command)
-    except ValueError as e:
-        return {"ok": False, "error": f"could not parse command: {e}", "command": command}
-    if not argv:
-        return {"ok": False, "error": "empty command", "command": command}
+def _run_subprocess(argv: list[str], *, cwd: str | None, env: dict | None, timeout: float, command: str, runner: str) -> dict:
+    """Shared subprocess runner used by both host and Docker shell modes."""
     t0 = time.time()
     try:
         proc = subprocess.run(
             argv,
-            cwd=str(root.resolve()),
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_scrubbed_env(),
+            env=env,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -215,21 +204,21 @@ def run_shell(root: Path, command: str, *, timeout: float = 30) -> dict:
             "ok": False,
             "error": f"command timed out after {timeout}s",
             "command": command,
-            "runner": "host",
+            "runner": runner,
         }
     except FileNotFoundError as e:
         return {
             "ok": False,
-            "error": f"command not found: {e.filename or argv[0]}",
+            "error": f"executable not found: {e.filename or (argv[0] if argv else '?')}",
             "command": command,
-            "runner": "host",
+            "runner": runner,
         }
     except OSError as e:
         return {
             "ok": False,
             "error": f"could not run command: {e}",
             "command": command,
-            "runner": "host",
+            "runner": runner,
         }
     duration = time.time() - t0
     merged = (proc.stdout or "") + (proc.stderr or "")
@@ -237,12 +226,96 @@ def run_shell(root: Path, command: str, *, timeout: float = 30) -> dict:
     return {
         "ok": proc.returncode == 0,
         "command": command,
-        "runner": "host",
+        "runner": runner,
         "exit_code": proc.returncode,
         "duration_s": round(duration, 3),
         "output": wrap_untrusted(capped) if capped else "",
         "truncated": truncated,
     }
+
+
+def _docker_argv(root: Path, image: str, network: str, inner_argv: list[str]) -> list[str]:
+    uid = os.getuid()
+    gid = os.getgid()
+    return [
+        "docker", "run", "--rm",
+        f"--network={network}",
+        "-v", f"{root.resolve()}:/work:rw",
+        "-w", "/work",
+        "--user", f"{uid}:{gid}",
+        "--memory", "1g",
+        "--cpus", "1",
+        "--read-only",
+        "--tmpfs", "/tmp:size=64m",
+        "-e", "HOME=/tmp",
+        "-e", "LANG=C.UTF-8",
+        image,
+        *inner_argv,
+    ]
+
+
+def run_shell(
+    root: Path,
+    command: str,
+    *,
+    timeout: float = 30,
+    runner: str = "host",
+    shell_network: str = "none",
+) -> dict:
+    """Execute `command` in `root` with no shell expansion and a scrubbed env.
+
+    `command` is parsed via shlex.split so model content cannot trigger shell
+    metacharacters ($VAR, backticks, pipes, redirection). For multi-step flows
+    the model should issue multiple `run_shell` calls. (Models that genuinely
+    need shell features can still call `sh -c "..."` explicitly — that's a
+    binary invocation, not metacharacter expansion.)
+
+    `runner` is either "host" or "docker:<image>". With docker, the resolved
+    argv is run inside a transient container with the project root bind-mounted
+    as /work, no host filesystem visible, a scrubbed minimal env, and the
+    network policy from `shell_network` (default "none" — fully offline).
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError as e:
+        return {"ok": False, "error": f"could not parse command: {e}", "command": command, "runner": runner}
+    if not argv:
+        return {"ok": False, "error": "empty command", "command": command, "runner": runner}
+
+    if runner == "host":
+        return _run_subprocess(
+            argv,
+            cwd=str(root.resolve()),
+            env=_scrubbed_env(),
+            timeout=timeout,
+            command=command,
+            runner="host",
+        )
+
+    if runner.startswith("docker:"):
+        image = runner[len("docker:"):].strip()
+        if not image:
+            return {"ok": False, "error": "docker runner missing image (use --shell-runner docker:<image>)",
+                    "command": command, "runner": runner}
+        if shell_network not in {"none", "bridge", "host"}:
+            return {"ok": False, "error": f"invalid shell_network {shell_network!r}; use none|bridge|host",
+                    "command": command, "runner": runner}
+        docker_argv = _docker_argv(root, image, shell_network, argv)
+        # Host env is irrelevant — container has its own minimal env via the
+        # -e flags above. We pass env=None so subprocess inherits this
+        # process's env *for finding docker on PATH*, but the container itself
+        # only sees what we explicitly set with -e.
+        return _run_subprocess(
+            docker_argv,
+            cwd=None,
+            env=None,
+            timeout=timeout,
+            command=command,
+            runner=runner,
+        )
+
+    return {"ok": False, "error": f"unknown runner {runner!r}; use 'host' or 'docker:<image>'",
+            "command": command, "runner": runner}
 
 
 def edit_file(
@@ -448,13 +521,18 @@ def run_tool(
     on_change: Callable[[str], None],
     *,
     shell_timeout: float = 30,
+    shell_runner: str = "host",
+    shell_network: str = "none",
 ) -> str:
     impls = {
         "read_file": lambda: read_file(root, **args),
         "write_file": lambda: write_file(root, on_change=on_change, **args),
         "edit_file": lambda: edit_file(root, on_change=on_change, **args),
         "grep": lambda: grep(root, **args),
-        "run_shell": lambda: run_shell(root, timeout=shell_timeout, **args),
+        "run_shell": lambda: run_shell(
+            root, timeout=shell_timeout, runner=shell_runner,
+            shell_network=shell_network, **args,
+        ),
     }
     if name not in impls:
         return json.dumps({"ok": False, "error": f"unknown tool: {name}"})

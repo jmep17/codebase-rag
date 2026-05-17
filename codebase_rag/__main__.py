@@ -259,6 +259,30 @@ def main() -> None:
         help="Per-command timeout for run_shell / :run (default: 30 seconds).",
     )
     p_chat.add_argument(
+        "--shell-runner",
+        type=str,
+        default="host",
+        metavar="host|docker:IMAGE",
+        help=(
+            "Where to execute run_shell / :run commands. 'host' (default) runs "
+            "directly on the host with scrubbed env. 'docker:<image>' runs each "
+            "command inside a transient container with the project root mounted "
+            "at /work, no host filesystem visible, and a minimal env. Example: "
+            "--shell-runner docker:python:3.13-slim."
+        ),
+    )
+    p_chat.add_argument(
+        "--shell-network",
+        type=str,
+        default="none",
+        choices=["none", "bridge", "host"],
+        help=(
+            "Docker network policy when --shell-runner=docker:... is set. "
+            "'none' (default) = no network; 'bridge' = standard docker bridge; "
+            "'host' = host networking (least isolation). Ignored when runner is host."
+        ),
+    )
+    p_chat.add_argument(
         "--confirm-writes",
         action="store_true",
         help=(
@@ -345,6 +369,8 @@ def main() -> None:
             read_only=args.read_only,
             allow_shell=args.allow_shell,
             shell_timeout=args.shell_timeout,
+            shell_runner=args.shell_runner,
+            shell_network=args.shell_network,
             confirm_writes=args.confirm_writes,
         )
 
