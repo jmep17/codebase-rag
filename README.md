@@ -5,7 +5,25 @@ Local codebase RAG with Ollama. Index your code, ask questions, get answers grou
 - **Embeddings:** `nomic-embed-text` (via Ollama)
 - **Chat:** `mistral-nemo` (via Ollama)
 - **Vector store:** ChromaDB (persistent, on-disk)
-- **Everything local.** Nothing leaves your machine.
+- **Everything local by default.** Nothing leaves your machine unless you opt in to a network feature.
+
+### Security & privacy at a glance
+
+| Feature | Network surface added | Default |
+|---|---|---|
+| Default `chat` | Localhost only (Ollama daemon at :11434) | On |
+| `--allow-web` | SearXNG (your own host) + `web_fetch` destinations | Off |
+| `--provider anthropic` | api.anthropic.com (chat only; embeddings stay local) | Off |
+| `--allow-shell` (host) | None | Off; commands run on host |
+| `--allow-shell --shell-runner docker:IMAGE` | Only what you allow via `--shell-network` (default `none`) | Off |
+
+Defenses against prompt injection in retrieved content / tool results:
+
+- Retrieved chunks, file contents, web pages, and shell output are wrapped in `<<<UNTRUSTED-...>>>` markers and the system prompt tells the model to treat anything between them as data, not instructions.
+- `--read-only` removes write/edit/shell tools from the model's schema entirely.
+- `--confirm-writes` prompts you before every `write_file` / `edit_file` executes.
+- `--web-allow` / `--web-block` cap which hosts `web_fetch` may contact (post-redirect host re-checked).
+- Every tool call and slash command is recorded in a per-project `audit.log` (`codebase-rag audit` to view).
 
 ## Setup
 
@@ -163,7 +181,119 @@ References are stored in the project's ChromaDB collection but tagged `kind=refe
 
 `codebase-rag reindex <project>` wipes only the project's chunks — your reference sets stay attached.
 
-The model has three tools: `read_file`, `write_file`, `edit_file`. It will use them automatically when you ask for changes ("add a test for…", "rename X to Y", "extract this into a helper"). Edits are confined to `--root` (defaults to the current working directory).
+## Advanced chat flags
+
+Everything below is opt-in. Default `codebase-rag chat` behaves exactly as before.
+
+### Conversation continuity
+
+```bash
+codebase-rag chat --resume          # continue this project's last conversation
+:reset                              # clear history, keep pins
+:forget                             # clear history + delete saved conversation
+```
+
+Conversations auto-save per-project at `~/.codebase-rag/meta/<hash>/last_conversation.json` after every turn.
+
+### Pinned files (`:add` / `:drop`)
+
+Force specific files into every turn's context regardless of retrieval:
+
+```
+:add codebase_rag/chat.py
+:add 'codebase_rag/*.py'            # globs work
+:drop codebase_rag/chat.py
+:dropall
+:pinned                              # list current pins
+```
+
+Pins persist with the conversation.
+
+### Git integration
+
+When the project root is a git repo, slash commands let you review and commit the model's edits:
+
+```
+:gitstatus
+:diff [path]                        # show pending diff
+:commit [message]                   # stage only files the model touched, prompt y/N
+:undo                               # find last [codebase-rag] commit, prompt y/N, then revert
+```
+
+No auto-commit. The model edits files; you review and commit when you're satisfied.
+
+### Shell tool
+
+```bash
+codebase-rag chat --allow-shell                                # host runner (default)
+codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim --shell-network none
+codebase-rag chat --allow-shell --shell-timeout 60
+```
+
+- **`run_shell` tool** — the model can request a shell command. Always prompts `[y/N/edit]` first.
+- **`:run <cmd>`** — you run a command directly; output is added to history for the next turn.
+- **Sandbox (host):** `cwd` pinned to root, `shell=False`, `shlex.split` parsing (no `$VAR`/pipes/backticks), 30s timeout, output capped at 50KB, env scrubbed (no `ANTHROPIC_API_KEY`, etc.).
+- **Sandbox (docker):** the above + transient container, project root bind-mounted at `/work`, `--network=none` by default, `--read-only` rootfs + 64MB tmpfs, non-root user, 1GB / 1 CPU caps.
+
+### Web search & fetch (SearXNG)
+
+```bash
+docker run -d -p 8080:8080 --name searxng searxng/searxng
+export SEARXNG_URL=http://localhost:8080
+pip install -e .[web]
+
+codebase-rag chat --allow-web --web-allow 'docs.python.org,*.readthedocs.io,github.com'
+```
+
+- **`web_search(query)`** via your own SearXNG — queries never leave your machine.
+- **`web_fetch(url)`** via httpx + trafilatura; content capped at 50KB, cached per project for 24h.
+- `--web-allow HOST_GLOB` / `--web-block HOST_GLOB` are repeatable and restrict what `web_fetch` may contact.
+- Post-redirect host is re-checked so a fetch through an allowed host can't silently redirect to an attacker.
+- Slash commands `:search <query>` and `:fetch <url>` work too.
+
+### Architect–coder split
+
+```bash
+codebase-rag chat --architect-model qwen3:30b-a3b --model qwen2.5-coder:7b
+```
+
+The architect (no tools) plans the steps; the coder (with tools) executes. Useful when you have a strong model for thinking and a fast model for editing.
+
+### Anthropic (opt-in cloud)
+
+```bash
+pip install -e .[cloud]
+export ANTHROPIC_API_KEY=sk-ant-...
+codebase-rag chat --provider anthropic --model claude-opus-4-7
+```
+
+Chat content goes to api.anthropic.com — a startup banner warns you. Embeddings stay on Ollama either way.
+
+### Read-only & confirm-writes
+
+```bash
+codebase-rag chat --read-only          # write_file/edit_file/run_shell removed from schema
+codebase-rag chat --confirm-writes     # prompt with diff/preview before every write or edit
+```
+
+### Verbose logging
+
+```bash
+codebase-rag chat -v                   # per-inference timing + token rates; full tool results
+```
+
+### Audit log
+
+Every tool call and slash command in every session is recorded at `~/.codebase-rag/meta/<hash>/audit.log` (long string args are redacted to length-only). Inspect:
+
+```bash
+codebase-rag audit                      # last 50 events for the current project
+codebase-rag audit --tool grep
+codebase-rag audit --since '2h'         # also: today, yesterday, 15m, 7d, ISO date
+codebase-rag audit --event tool_call --pretty
+```
+
+The model has these tools (subset depending on flags): `read_file`, `grep`, `write_file`, `edit_file`, plus `run_shell` with `--allow-shell` and `web_search` / `web_fetch` with `--allow-web`.
 
 After every successful write or edit, the affected file is automatically re-chunked and the index is updated — no manual `reindex` needed for edits the agent makes.
 
@@ -199,30 +329,35 @@ The system prompt forbids the model from claiming a write succeeded until it see
 
 ### Tools
 
-| Tool         | Args                              | Behavior                                                                |
-| ------------ | --------------------------------- | ----------------------------------------------------------------------- |
-| `read_file`  | `path`                            | Returns full file content. Refuses files over 200KB; use retrieval instead. |
-| `grep`       | `pattern`, `file_glob?`           | Regex-search every source file. Respects ignore rules and nested-repo skips. Caps at 300 matches. **Use this for "list every / find all" queries** — retrieval alone is top-K and will miss matches. |
-| `write_file` | `path`, `content`                 | Overwrites the file. Reads it back and reports bytes/lines written.     |
-| `edit_file`  | `path`, `old_string`, `new_string`| Replaces exactly one occurrence. Errors if `old_string` is missing or appears more than once. |
+| Tool         | Args                              | Behavior                                                                | Requires |
+| ------------ | --------------------------------- | ----------------------------------------------------------------------- | --- |
+| `read_file`  | `path`                            | Returns full file content (wrapped in untrusted markers). Refuses files over 200KB. | always |
+| `grep`       | `pattern`, `file_glob?`, `literal?` | Regex-search every source file. Caps at 300 matches. **Use this for "list every / find all" queries.** | always |
+| `write_file` | `path`, `content`                 | Overwrites the file. Reads it back and reports bytes/lines written.     | not `--read-only` |
+| `edit_file`  | `path`, `old_string`, `new_string`| Replaces exactly one occurrence; errors on missing or ambiguous match.  | not `--read-only` |
+| `run_shell`  | `command`                         | Execute a command. Confirmation prompt fires before each run. shlex.split parsing, no shell expansion. Optional Docker runner. | `--allow-shell` |
+| `web_search` | `query`, `top_k?`                 | Search via your self-hosted SearXNG.                                    | `--allow-web` |
+| `web_fetch`  | `url`                             | Fetch a URL, extract main text via trafilatura, cache 24h.              | `--allow-web` |
 
-All paths resolve under `--root`. Anything outside is rejected.
+All file paths resolve under `--root`. Anything outside is rejected.
 
 The system prompt instructs the agent to call `grep` for any enumeration question (e.g. "list every API call this app makes") rather than relying on the retrieved Context block, which is semantic top-K and will silently miss matches.
 
 ## Tuning
 
-Most knobs live in `codebase_rag/index.py` and `codebase_rag/chat.py`:
+Most knobs live in `codebase_rag/index.py` and `codebase_rag/chat.py`. The chat model can be set per-invocation via `--model NAME`, the env var `CODEBASE_RAG_CHAT_MODEL`, or this constant:
 
 | Setting             | File         | Default | Purpose                                  |
 | ------------------- | ------------ | ------- | ---------------------------------------- |
-| `CHAT_MODEL`        | `chat.py`    | `mistral-nemo` | Swap for `llama3.1`, `qwen2.5-coder:32b`, etc. |
+| `CHAT_MODEL`        | `chat.py`    | `mistral-nemo` | Default model when no `--model` / env var. Try `qwen3:8b`, `qwen2.5-coder:32b`, `llama3.3:70b`. |
 | `EMBEDDING_MODEL`   | `index.py`   | `nomic-embed-text` | Try `mxbai-embed-large` for higher quality. |
-| `TOP_K`             | `chat.py`    | `8`     | More chunks = richer context, more tokens. |
-| `CHUNK_LINES`       | `index.py`   | `50`    | Bigger chunks = more context per hit.    |
-| `OVERLAP_LINES`     | `index.py`   | `10`    | Reduces boundary-miss issues.            |
+| `TOP_K`             | `chat.py`    | `5`     | More chunks = richer context, more tokens. |
+| `MAX_TURNS`         | `chat.py`    | `20`    | Tool-call rounds per user message before bailing. |
+| `CHUNK_LINES`       | `index.py`   | `80`    | Bigger chunks = more context per hit.    |
+| `OVERLAP_LINES`     | `index.py`   | `15`    | Reduces boundary-miss issues.            |
+| `MAX_CHUNK_CHARS`   | `index.py`   | `3500`  | Cap per-chunk size before embedding.     |
 | `MAX_FILE_BYTES`    | `index.py`   | `200000` | Skip enormous files (often generated).  |
-| `num_ctx`           | `chat.py`    | `32768` | Ollama context window for chat.          |
+| `num_ctx`           | `chat.py`    | `65536` | Ollama context window for chat.          |
 
 If you swap the embedding model, **delete and rebuild the index** — embedding spaces aren't interchangeable.
 
