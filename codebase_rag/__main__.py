@@ -292,6 +292,32 @@ def main() -> None:
             "unfamiliar code, or as a guardrail against prompt injection."
         ),
     )
+    p_chat.add_argument(
+        "--allow-web",
+        action="store_true",
+        help=(
+            "Enable web_search (via SearXNG) and web_fetch tools, plus :search and "
+            ":fetch slash commands. Requires SEARXNG_URL env var (e.g. "
+            "http://localhost:8080) — run SearXNG locally for full privacy."
+        ),
+    )
+    p_chat.add_argument(
+        "--web-allow",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
+        help=(
+            "Host glob to allow for web_fetch (repeatable). e.g. 'docs.python.org', "
+            "'*.readthedocs.io'. If unset, any host is allowed (subject to --web-block)."
+        ),
+    )
+    p_chat.add_argument(
+        "--web-block",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
+        help="Host glob to block for web_fetch (repeatable). Blocklist takes precedence over allowlist.",
+    )
 
     args = parser.parse_args()
 
@@ -359,6 +385,15 @@ def main() -> None:
         if not args.root.exists():
             print(f"Root does not exist: {args.root}", file=sys.stderr)
             sys.exit(1)
+        searxng_url = os.environ.get("SEARXNG_URL", "")
+        if args.allow_web and not searxng_url:
+            print(
+                "error: --allow-web requires SEARXNG_URL env var.\n"
+                "  Quick start: docker run -d -p 8080:8080 --name searxng searxng/searxng\n"
+                "  Then:        export SEARXNG_URL=http://localhost:8080",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         chat_mod.agent_loop(
             args.db,
             root=args.root.resolve(),
@@ -372,6 +407,10 @@ def main() -> None:
             shell_runner=args.shell_runner,
             shell_network=args.shell_network,
             confirm_writes=args.confirm_writes,
+            allow_web=args.allow_web,
+            web_allow=tuple(args.web_allow),
+            web_block=tuple(args.web_block),
+            searxng_url=searxng_url,
         )
 
 

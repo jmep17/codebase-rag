@@ -462,6 +462,47 @@ _SCHEMA_EDIT_FILE = {
 }
 
 
+_SCHEMA_WEB_SEARCH = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": (
+            "Search the web via the user's self-hosted SearXNG instance. Use when "
+            "you need information not present in the codebase: external API docs, "
+            "library reference, recent news, etc. Returns up to top_k results with "
+            "title, URL, and a snippet."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Natural-language search query."},
+                "top_k": {"type": "integer", "description": "Max results (default 10)."},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+_SCHEMA_WEB_FETCH = {
+    "type": "function",
+    "function": {
+        "name": "web_fetch",
+        "description": (
+            "Fetch a URL and return its main text content (HTML stripped). "
+            "Capped at 50KB; pages may be rejected by the session's --web-allow/"
+            "--web-block lists. Use after web_search has surfaced a relevant URL, "
+            "or when the user gave you one directly. Cached for 24h per project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Full URL including scheme."},
+            },
+            "required": ["url"],
+        },
+    },
+}
+
 _SCHEMA_RUN_SHELL = {
     "type": "function",
     "function": {
@@ -497,9 +538,9 @@ _SCHEMA_RUN_SHELL = {
 def tool_schemas_for(*, read_only: bool = False, allow_shell: bool = False, allow_web: bool = False) -> list[dict]:
     """Assemble the list of tool schemas exposed to the model for this session.
 
-    - read_only=True: only read_file and grep are exposed (no write_file / edit_file / run_shell).
-    - allow_shell=True: adds run_shell (subject to read_only).
-    - allow_web=True: placeholder for Feature 6; not active yet.
+    - read_only=True: only read_file, grep, and (if allow_web) web tools are exposed.
+    - allow_shell=True: adds run_shell (suppressed by read_only).
+    - allow_web=True: adds web_search and web_fetch.
     """
     schemas: list[dict] = [_SCHEMA_READ_FILE, _SCHEMA_GREP]
     if not read_only:
@@ -507,6 +548,9 @@ def tool_schemas_for(*, read_only: bool = False, allow_shell: bool = False, allo
         schemas.append(_SCHEMA_EDIT_FILE)
         if allow_shell:
             schemas.append(_SCHEMA_RUN_SHELL)
+    if allow_web:
+        schemas.append(_SCHEMA_WEB_SEARCH)
+        schemas.append(_SCHEMA_WEB_FETCH)
     return schemas
 
 
@@ -523,7 +567,10 @@ def run_tool(
     shell_timeout: float = 30,
     shell_runner: str = "host",
     shell_network: str = "none",
+    web_config: dict | None = None,
 ) -> str:
+    from . import web as web_mod
+    web_cfg = web_config or {}
     impls = {
         "read_file": lambda: read_file(root, **args),
         "write_file": lambda: write_file(root, on_change=on_change, **args),
@@ -532,6 +579,16 @@ def run_tool(
         "run_shell": lambda: run_shell(
             root, timeout=shell_timeout, runner=shell_runner,
             shell_network=shell_network, **args,
+        ),
+        "web_search": lambda: web_mod.web_search(
+            searxng_url=web_cfg.get("searxng_url", ""),
+            **args,
+        ),
+        "web_fetch": lambda: web_mod.web_fetch(
+            allow_patterns=tuple(web_cfg.get("allow", ())),
+            block_patterns=tuple(web_cfg.get("block", ())),
+            cache_dir=Path(web_cfg.get("cache_dir", "/tmp")),
+            **args,
         ),
     }
     if name not in impls:

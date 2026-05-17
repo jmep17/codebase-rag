@@ -440,12 +440,27 @@ def agent_loop(
     shell_runner: str = "host",
     shell_network: str = "none",
     confirm_writes: bool = False,
+    allow_web: bool = False,
+    web_allow: tuple[str, ...] = (),
+    web_block: tuple[str, ...] = (),
+    searxng_url: str = "",
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
     meta_dir = project_meta_dir(root)
     session = uuid.uuid4().hex[:8]
-    tool_schemas = tool_schemas_for(read_only=read_only, allow_shell=allow_shell and not read_only)
+    tool_schemas = tool_schemas_for(
+        read_only=read_only,
+        allow_shell=allow_shell and not read_only,
+        allow_web=allow_web,
+    )
+    web_cache_dir = meta_dir / "web_cache"
+    web_config = {
+        "searxng_url": searxng_url,
+        "allow": list(web_allow),
+        "block": list(web_block),
+        "cache_dir": str(web_cache_dir),
+    } if allow_web else None
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     name = collection_name_for(root)
     try:
@@ -463,6 +478,10 @@ def agent_loop(
         read_only=read_only, allow_shell=allow_shell, shell_timeout=shell_timeout,
         shell_runner=shell_runner, shell_network=shell_network,
         confirm_writes=confirm_writes,
+        allow_web=allow_web,
+        web_allow=list(web_allow),
+        web_block=list(web_block),
+        searxng_url=searxng_url if allow_web else "",
     )
 
     touched_files: set[str] = set()
@@ -501,8 +520,12 @@ def agent_loop(
         net_desc = "" if shell_runner == "host" else f", network={shell_network}"
         shell_marker = f"  [shell: enabled, runner={runner_desc}{net_desc}, user-confirmed]"
     confirm_marker = "  [confirm-writes: every write/edit asks first]" if confirm_writes else ""
+    web_marker = ""
+    if allow_web:
+        allow_desc = ",".join(web_allow) if web_allow else "any host"
+        web_marker = f"  [web: search via {searxng_url or 'unset'}, fetch hosts: {allow_desc}]"
     print(
-        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}\n"
+        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}\n"
         f"Project: {root}  (collection: {name}, {notes_marker})"
         f"{resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -604,6 +627,62 @@ def agent_loop(
             print(f"(:dropall: removed {count} pinned files)")
             audit.log_event(meta_dir, session, "slash_command", command="dropall")
             _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            continue
+        if user_input.startswith(":search"):
+            query = user_input[len(":search"):].strip()
+            if not allow_web:
+                print(":search requires --allow-web at session start")
+                audit.log_event(meta_dir, session, "slash_command", command="search", error="not allowed")
+                continue
+            if not query:
+                print(":search usage: :search <query>")
+                continue
+            from . import web as web_mod
+            audit.log_event(meta_dir, session, "slash_command", command="search", arg=query)
+            r = web_mod.web_search(query, searxng_url=searxng_url, top_k=10)
+            audit.log_event(meta_dir, session, "tool_result", tool="web_search",
+                            result={k: v for k, v in r.items() if k != "results"})
+            if not r.get("ok"):
+                print(f"  search error: {r.get('error')}")
+            else:
+                for i, hit in enumerate(r.get("results", []), 1):
+                    print(f"  [{i}] {hit.get('title') or '(no title)'}")
+                    print(f"       {hit.get('url')}")
+            history.append({
+                "role": "user",
+                "content": f"I ran web_search({query!r}) and got:\n```\n{json.dumps(r, indent=2)}\n```",
+            })
+            continue
+        if user_input.startswith(":fetch"):
+            url = user_input[len(":fetch"):].strip()
+            if not allow_web:
+                print(":fetch requires --allow-web at session start")
+                audit.log_event(meta_dir, session, "slash_command", command="fetch", error="not allowed")
+                continue
+            if not url:
+                print(":fetch usage: :fetch <url>")
+                continue
+            from . import web as web_mod
+            audit.log_event(meta_dir, session, "slash_command", command="fetch", arg=url)
+            r = web_mod.web_fetch(
+                url,
+                allow_patterns=tuple(web_allow),
+                block_patterns=tuple(web_block),
+                cache_dir=web_cache_dir,
+            )
+            audit.log_event(meta_dir, session, "tool_result", tool="web_fetch",
+                            result={k: v for k, v in r.items() if k != "content"})
+            if not r.get("ok"):
+                print(f"  fetch error: {r.get('error')}")
+            else:
+                marker = " (cached)" if r.get("cached") else ""
+                print(f"  [{r.get('status', '?')} · {r.get('url')}{marker}]")
+                if r.get("title"):
+                    print(f"  Title: {r['title']}")
+            history.append({
+                "role": "user",
+                "content": f"I ran web_fetch({url!r}) and got:\n```\n{json.dumps(r, indent=2)[:4000]}\n```",
+            })
             continue
         if user_input.startswith(":run"):
             cmd = user_input[len(":run"):].strip()
@@ -855,6 +934,7 @@ def agent_loop(
                     shell_timeout=shell_timeout,
                     shell_runner=shell_runner,
                     shell_network=shell_network,
+                    web_config=web_config,
                 )
                 tool_elapsed = time.time() - tool_t0
                 try:
