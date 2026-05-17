@@ -22,14 +22,26 @@ from .index import (
     read_notes,
     reindex_file,
 )
-from .tools import UNTRUSTED_BEGIN, UNTRUSTED_END, run_tool, tool_schemas_for
+from .tools import (
+    MAX_READ_BYTES,
+    UNTRUSTED_BEGIN,
+    UNTRUSTED_END,
+    resolve_safe,
+    run_tool,
+    tool_schemas_for,
+)
 
 
 def _conversation_path(root: Path) -> Path:
     return project_meta_dir(root) / "last_conversation.json"
 
 
-def _save_conversation(root: Path, history: list[dict], model: str) -> None:
+def _save_conversation(
+    root: Path,
+    history: list[dict],
+    model: str,
+    pinned: list[str] | None = None,
+) -> None:
     """Persist the conversation to the project's meta dir (system message stripped)."""
     path = _conversation_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +50,7 @@ def _save_conversation(root: Path, history: list[dict], model: str) -> None:
         "model": model,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "messages": saved_msgs,
+        "pinned": pinned or [],
     }
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -132,12 +145,13 @@ def retrieve(collection, query: str, top_k: int = TOP_K) -> list[dict]:
     return chunks
 
 
-def format_context(chunks: list[dict]) -> str:
-    """Group chunks by kind (project / reference label) and render with section headers.
+def format_context(chunks: list[dict], pinned: list[dict] | None = None) -> str:
+    """Render context for a user turn.
 
-    The whole context block is wrapped in <<<UNTRUSTED-...>>> markers so the model
-    treats embedded text as data, not as instructions (Feature 7a defense).
+    Order: pinned files (full content), project chunks (retrieved), reference chunks.
+    Wraps the whole block in <<<UNTRUSTED-...>>> markers (Feature 7a).
     """
+    pinned = pinned or []
     project_chunks = []
     references: dict[str, list[dict]] = {}
     for c in chunks:
@@ -148,6 +162,12 @@ def format_context(chunks: list[dict]) -> str:
             project_chunks.append(c)
 
     sections: list[str] = []
+    if pinned:
+        body = "\n\n".join(
+            f"### {p['path']} (pinned, full file, {p['size']} bytes)\n```\n{p['content']}\n```"
+            for p in pinned
+        )
+        sections.append(f"## Pinned files (always shown)\n\n{body}")
     if project_chunks:
         body = "\n\n".join(
             f"### {c['path']}:{c['start_line']}-{c['end_line']}\n```\n{c['content']}\n```"
@@ -164,6 +184,56 @@ def format_context(chunks: list[dict]) -> str:
         return ""
     inner = "\n\n".join(sections)
     return f"{UNTRUSTED_BEGIN}\n{inner}\n{UNTRUSTED_END}"
+
+
+def _load_pinned_files(pinned_paths: list[str], root: Path) -> list[dict]:
+    """Read fresh content for each pinned path. Skips paths that vanished or grew too large."""
+    out: list[dict] = []
+    for rel in pinned_paths:
+        try:
+            full = resolve_safe(root, rel)
+        except PermissionError:
+            continue
+        if not full.is_file():
+            continue
+        try:
+            size = full.stat().st_size
+        except OSError:
+            continue
+        if size > MAX_READ_BYTES:
+            continue
+        try:
+            content = full.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        out.append({"path": str(full.relative_to(root.resolve())), "content": content, "size": size})
+    return out
+
+
+def _expand_pin_arg(arg: str, root: Path) -> list[str]:
+    """Expand a :add argument (path or glob) to a list of relative paths under root."""
+    root = root.resolve()
+    arg = arg.strip()
+    if not arg:
+        return []
+    # If the literal path exists, take it as-is (after safety check).
+    candidate = (root / arg).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return []
+    if candidate.is_file():
+        return [str(candidate.relative_to(root))]
+    # Otherwise treat as glob, scoped to root.
+    matches = []
+    for p in root.glob(arg):
+        if p.is_file():
+            try:
+                rel = p.resolve().relative_to(root)
+            except ValueError:
+                continue
+            matches.append(str(rel))
+    return sorted(matches)
 
 
 def _assistant_msg_from_response(msg) -> dict:
@@ -297,15 +367,18 @@ def agent_loop(
 
     system_prompt = _system_prompt_for(root)
     history: list[dict] = [{"role": "system", "content": system_prompt}]
+    pinned_paths: list[str] = []
     resumed_marker = ""
     if resume:
         saved = _load_conversation(root)
         if saved and saved.get("messages"):
             history.extend(saved["messages"])
+            pinned_paths = list(saved.get("pinned") or [])
             saved_at = saved.get("saved_at", "?")
             saved_model = saved.get("model", "?")
+            pin_note = f", {len(pinned_paths)} pinned" if pinned_paths else ""
             resumed_marker = (
-                f"\nResumed: {len(saved['messages'])} prior messages "
+                f"\nResumed: {len(saved['messages'])} prior messages{pin_note} "
                 f"(saved {saved_at}, model {saved_model})"
             )
         else:
@@ -333,31 +406,122 @@ def agent_loop(
             return
         if user_input == ":reset":
             history = [{"role": "system", "content": _system_prompt_for(root)}]
-            _save_conversation(root, history, chat_model)
+            _save_conversation(root, history, chat_model, pinned=pinned_paths)
             audit.log_event(meta_dir, session, "slash_command", command="reset")
-            print("(history cleared)")
+            print("(history cleared; pinned files kept)")
             continue
         if user_input == ":forget":
             history = [{"role": "system", "content": _system_prompt_for(root)}]
+            pinned_paths = []
             _clear_conversation(root)
             audit.log_event(meta_dir, session, "slash_command", command="forget")
-            print("(history cleared and saved conversation deleted)")
+            print("(history cleared, pinned files cleared, saved conversation deleted)")
+            continue
+        if user_input.startswith(":add"):
+            arg = user_input[len(":add"):].strip()
+            if not arg:
+                print(":add usage: :add <path-or-glob>   (e.g. :add src/auth.py  or  :add 'src/**/*.py')")
+                continue
+            matches = _expand_pin_arg(arg, root)
+            if not matches:
+                print(f"(:add: no files found matching {arg!r} under {root})")
+                continue
+            added = []
+            skipped: list[tuple[str, str]] = []
+            for rel in matches:
+                if rel in pinned_paths:
+                    skipped.append((rel, "already pinned"))
+                    continue
+                full = root / rel
+                try:
+                    size = full.stat().st_size
+                except OSError as e:
+                    skipped.append((rel, f"{type(e).__name__}"))
+                    continue
+                if size > MAX_READ_BYTES:
+                    skipped.append((rel, f"too large ({size} bytes > {MAX_READ_BYTES})"))
+                    continue
+                pinned_paths.append(rel)
+                added.append((rel, size))
+            for rel, size in added:
+                print(f"  + pinned {rel} ({size} bytes)")
+            for rel, reason in skipped:
+                print(f"  · skipped {rel} ({reason})")
+            audit.log_event(
+                meta_dir, session, "slash_command",
+                command="add", arg=arg, added=[r for r, _ in added],
+            )
+            _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            continue
+        if user_input.startswith(":drop"):
+            arg = user_input[len(":drop"):].strip()
+            if not arg:
+                print(":drop usage: :drop <path-or-glob>")
+                continue
+            if arg == "all":
+                count = len(pinned_paths)
+                pinned_paths.clear()
+                print(f"(:drop all: removed {count} pinned files)")
+                audit.log_event(meta_dir, session, "slash_command", command="dropall")
+                _save_conversation(root, history, chat_model, pinned=pinned_paths)
+                continue
+            # Match either an exact rel path or a glob over the current pin list
+            removed: list[str] = []
+            for rel in list(pinned_paths):
+                if rel == arg or Path(rel).match(arg):
+                    pinned_paths.remove(rel)
+                    removed.append(rel)
+            if not removed:
+                print(f"(:drop: no pinned files match {arg!r})")
+            else:
+                for rel in removed:
+                    print(f"  - unpinned {rel}")
+            audit.log_event(
+                meta_dir, session, "slash_command",
+                command="drop", arg=arg, removed=removed,
+            )
+            _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            continue
+        if user_input == ":dropall":
+            count = len(pinned_paths)
+            pinned_paths.clear()
+            print(f"(:dropall: removed {count} pinned files)")
+            audit.log_event(meta_dir, session, "slash_command", command="dropall")
+            _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            continue
+        if user_input == ":pinned":
+            if not pinned_paths:
+                print("(no pinned files; use :add <path> to add some)")
+            else:
+                pinned_now = _load_pinned_files(pinned_paths, root)
+                total = sum(p["size"] for p in pinned_now)
+                print(f"{len(pinned_now)} pinned file(s), {total} bytes total:")
+                pinned_by_path = {p["path"]: p["size"] for p in pinned_now}
+                for rel in pinned_paths:
+                    if rel in pinned_by_path:
+                        print(f"  - {rel} ({pinned_by_path[rel]} bytes)")
+                    else:
+                        print(f"  - {rel} (missing or unreadable)")
+            audit.log_event(meta_dir, session, "slash_command", command="pinned")
             continue
 
         retrieve_t0 = time.time()
         chunks = retrieve(collection, user_input)
+        pinned_files = _load_pinned_files(pinned_paths, root)
         retrieve_elapsed = time.time() - retrieve_t0
-        context = format_context(chunks)
+        context = format_context(chunks, pinned=pinned_files)
 
         if verbose:
             project_count = sum(1 for c in chunks if (c.get("kind") or "project") == "project")
             ref_count = len(chunks) - project_count
+            pin_note = f", {len(pinned_files)} pinned" if pinned_files else ""
             print(
                 f"[retrieve: {len(chunks)} chunks ({project_count} project, "
-                f"{ref_count} reference) in {retrieve_elapsed:.2f}s]"
+                f"{ref_count} reference{pin_note}) in {retrieve_elapsed:.2f}s]"
             )
         else:
-            print(f"[retrieve: {len(chunks)} chunks · {retrieve_elapsed:.2f}s]")
+            pin_note = f" + {len(pinned_files)} pinned" if pinned_files else ""
+            print(f"[retrieve: {len(chunks)} chunks{pin_note} · {retrieve_elapsed:.2f}s]")
 
         if show_context:
             print("--- retrieved ---")
@@ -452,6 +616,6 @@ def agent_loop(
         print(f"[{' · '.join(summary_parts)}]")
 
         try:
-            _save_conversation(root, history, chat_model)
+            _save_conversation(root, history, chat_model, pinned=pinned_paths)
         except OSError as e:
             print(f"(could not save conversation: {e})")
