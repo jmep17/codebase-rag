@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+from . import audit as audit_mod
 from . import chat as chat_mod
 from . import index as index_mod
 
@@ -158,6 +160,20 @@ def main() -> None:
         help="Glob pattern to exclude inside the reference source. Repeatable.",
     )
 
+    p_audit = subparsers.add_parser(
+        "audit",
+        help="Show the per-project audit log of tool calls and slash commands.",
+    )
+    p_audit.add_argument(
+        "--root", type=Path, default=Path.cwd(),
+        help="Project root whose audit log to show (default: current working directory).",
+    )
+    p_audit.add_argument("--tool", type=str, default=None, help="Filter by tool name (e.g. grep, edit_file).")
+    p_audit.add_argument("--event", type=str, default=None, help="Filter by event type (tool_call, tool_result, slash_command, session_start, session_end).")
+    p_audit.add_argument("--since", type=str, default=None, help="e.g. 'today', 'yesterday', '15m', '2h', '7d', or ISO date.")
+    p_audit.add_argument("--limit", type=int, default=50, help="Max number of events to show (default: 50). 0 = all.")
+    p_audit.add_argument("--pretty", action="store_true", help="Pretty-print each entry over multiple lines.")
+
     p_rmref = subparsers.add_parser(
         "remove-reference",
         help="Remove a labeled reference set from a project.",
@@ -271,6 +287,8 @@ def main() -> None:
             print(f"Project root does not exist: {args.for_project}", file=sys.stderr)
             sys.exit(1)
         index_mod.remove_reference(args.db, args.for_project.resolve(), args.label)
+    elif args.command == "audit":
+        _handle_audit(args)
     elif args.command == "chat":
         if not args.db.exists():
             print(
@@ -289,6 +307,36 @@ def main() -> None:
             verbose=args.verbose,
             resume=args.resume,
         )
+
+
+def _handle_audit(args: argparse.Namespace) -> None:
+    if not args.root.exists():
+        print(f"Project root does not exist: {args.root}", file=sys.stderr)
+        sys.exit(1)
+    root = args.root.resolve()
+    since = None
+    if args.since:
+        try:
+            since = audit_mod.parse_since(args.since)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+    rows = audit_mod.tail_audit(
+        index_mod.project_meta_dir(root),
+        since=since,
+        tool=args.tool,
+        event=args.event,
+        limit=args.limit,
+    )
+    if not rows:
+        print(f"(no matching events in audit log for {root})")
+        return
+    for row in rows:
+        if args.pretty:
+            print(json.dumps(row, indent=2))
+            print()
+        else:
+            print(json.dumps(row, separators=(",", ":")))
 
 
 def _handle_notes(args: argparse.Namespace) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 from pathlib import Path
 
 import chromadb
@@ -12,6 +13,7 @@ import ollama
 
 from datetime import datetime, timezone
 
+from . import audit
 from .index import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL,
@@ -254,6 +256,8 @@ def agent_loop(
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
+    meta_dir = project_meta_dir(root)
+    session = uuid.uuid4().hex[:8]
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     name = collection_name_for(root)
     try:
@@ -263,6 +267,12 @@ def agent_loop(
             f"No index for {root}. Run `codebase-rag index .` in this directory first."
         )
         return
+
+    audit.log_event(
+        meta_dir, session, "session_start",
+        model=chat_model, root=str(root), collection=name,
+        show_context=show_context, verbose=verbose, resume=resume,
+    )
 
     def on_change(rel_path: str) -> None:
         try:
@@ -298,19 +308,23 @@ def agent_loop(
             user_input = input("\n> ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
+            audit.log_event(meta_dir, session, "session_end", reason="eof")
             return
         if not user_input:
             continue
         if user_input in (":q", "exit", "quit"):
+            audit.log_event(meta_dir, session, "session_end", reason="user_quit")
             return
         if user_input == ":reset":
             history = [{"role": "system", "content": _system_prompt_for(root)}]
             _save_conversation(root, history, chat_model)
+            audit.log_event(meta_dir, session, "slash_command", command="reset")
             print("(history cleared)")
             continue
         if user_input == ":forget":
             history = [{"role": "system", "content": _system_prompt_for(root)}]
             _clear_conversation(root)
+            audit.log_event(meta_dir, session, "slash_command", command="forget")
             print("(history cleared and saved conversation deleted)")
             continue
 
@@ -383,18 +397,30 @@ def agent_loop(
                 break
 
             for call in tool_calls:
-                name = call["function"]["name"]
+                tname = call["function"]["name"]
                 args = call["function"]["arguments"]
                 if isinstance(args, str):
                     try:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
+                audit.log_event(meta_dir, session, "tool_call", tool=tname, args=args)
                 tool_t0 = time.time()
-                result = run_tool(name, args, root, on_change)
+                result = run_tool(tname, args, root, on_change)
                 tool_elapsed = time.time() - tool_t0
+                try:
+                    parsed = json.loads(result)
+                    summary = {k: v for k, v in parsed.items() if k not in {"content", "stdout", "stderr", "matches"}}
+                    if isinstance(parsed, dict) and "matches" in parsed:
+                        summary["match_count"] = parsed.get("match_count")
+                except (TypeError, json.JSONDecodeError):
+                    summary = {"raw_preview_len": len(result) if isinstance(result, str) else 0}
+                audit.log_event(
+                    meta_dir, session, "tool_result",
+                    tool=tname, duration_s=round(tool_elapsed, 3), result=summary,
+                )
                 preview = result if verbose else result[:200]
-                print(f"  -> {name}({', '.join(args.keys())}) [{tool_elapsed:.2f}s]")
+                print(f"  -> {tname}({', '.join(args.keys())}) [{tool_elapsed:.2f}s]")
                 print(f"     {preview}")
                 history.append({"role": "tool", "content": result})
         else:
