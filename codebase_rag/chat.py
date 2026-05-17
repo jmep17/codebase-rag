@@ -28,6 +28,7 @@ from .tools import (
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
     resolve_safe,
+    run_shell,
     run_tool,
     tool_schemas_for,
 )
@@ -66,6 +67,34 @@ def _load_conversation(root: Path) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _confirm_shell(args: dict) -> dict | None:
+    """Prompt the user before letting the model run a shell command.
+
+    Returns the (possibly edited) args dict on approval, or None on decline.
+    """
+    cmd = (args.get("command") or "").strip()
+    print(f"  [model wants to run: {cmd}]")
+    try:
+        ans = input("    Run this command? [y/N/edit] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if ans == "edit":
+        try:
+            new_cmd = input("    new command: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+        if not new_cmd:
+            return None
+        new_args = dict(args)
+        new_args["command"] = new_cmd
+        return new_args
+    if ans in ("y", "yes"):
+        return args
+    return None
 
 
 def _last_assistant_summary(history: list[dict]) -> str:
@@ -349,12 +378,14 @@ def agent_loop(
     verbose: bool = False,
     resume: bool = False,
     read_only: bool = False,
+    allow_shell: bool = False,
+    shell_timeout: float = 30,
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
     meta_dir = project_meta_dir(root)
     session = uuid.uuid4().hex[:8]
-    tool_schemas = tool_schemas_for(read_only=read_only)
+    tool_schemas = tool_schemas_for(read_only=read_only, allow_shell=allow_shell and not read_only)
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     name = collection_name_for(root)
     try:
@@ -369,7 +400,7 @@ def agent_loop(
         meta_dir, session, "session_start",
         model=chat_model, root=str(root), collection=name,
         show_context=show_context, verbose=verbose, resume=resume,
-        read_only=read_only,
+        read_only=read_only, allow_shell=allow_shell, shell_timeout=shell_timeout,
     )
 
     touched_files: set[str] = set()
@@ -402,8 +433,11 @@ def agent_loop(
     notes_marker = "with notes" if read_notes(root).strip() else "no notes"
     read_only_marker = "  [READ-ONLY: write/edit tools disabled]" if read_only else ""
     git_marker = "  [git: review-then-commit]" if gitops.is_git_repo(root) else ""
+    shell_marker = ""
+    if allow_shell and not read_only:
+        shell_marker = "  [shell: run_shell tool enabled, host runner, user-confirmed]"
     print(
-        f"Chatting with {chat_model}.{read_only_marker}{git_marker}\n"
+        f"Chatting with {chat_model}.{read_only_marker}{git_marker}{shell_marker}\n"
         f"Project: {root}  (collection: {name}, {notes_marker})"
         f"{resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -505,6 +539,42 @@ def agent_loop(
             print(f"(:dropall: removed {count} pinned files)")
             audit.log_event(meta_dir, session, "slash_command", command="dropall")
             _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            continue
+        if user_input.startswith(":run"):
+            cmd = user_input[len(":run"):].strip()
+            if not allow_shell:
+                print(":run requires --allow-shell at session start")
+                audit.log_event(meta_dir, session, "slash_command", command="run", error="not allowed")
+                continue
+            if not cmd:
+                print(":run usage: :run <command>")
+                continue
+            audit.log_event(meta_dir, session, "slash_command", command="run", arg=cmd)
+            result_dict = run_shell(root, cmd, timeout=shell_timeout)
+            audit.log_event(
+                meta_dir, session, "tool_result",
+                tool="run_shell", duration_s=result_dict.get("duration_s"),
+                result={k: v for k, v in result_dict.items() if k != "output"},
+            )
+            print(f"  [exit {result_dict.get('exit_code', '?')} · {result_dict.get('duration_s', 0)}s]")
+            out = result_dict.get("output") or ""
+            if out:
+                # Strip the untrusted-wrapper markers before printing to terminal — they're
+                # only meaningful when the text re-enters the model's context.
+                cleaned = out
+                if cleaned.startswith(UNTRUSTED_BEGIN):
+                    cleaned = cleaned[len(UNTRUSTED_BEGIN):].lstrip("\n")
+                if cleaned.endswith(UNTRUSTED_END):
+                    cleaned = cleaned[: -len(UNTRUSTED_END)].rstrip("\n")
+                print(cleaned)
+            # Feed result back into history so the next turn can reason about it.
+            history.append({
+                "role": "user",
+                "content": (
+                    f"I ran `{cmd}` and got:\n"
+                    f"```\n{json.dumps(result_dict, indent=2)}\n```"
+                ),
+            })
             continue
         if user_input == ":gitstatus":
             if not gitops.is_git_repo(root):
@@ -687,8 +757,27 @@ def agent_loop(
                     except json.JSONDecodeError:
                         args = {}
                 audit.log_event(meta_dir, session, "tool_call", tool=tname, args=args)
+                # Model-driven shell calls require explicit user confirmation.
+                if tname == "run_shell":
+                    confirmation = _confirm_shell(args)
+                    if confirmation is None:
+                        # User declined or aborted; synthesize a tool result and continue.
+                        declined = {"ok": False, "error": "user declined to run command",
+                                    "command": args.get("command", "")}
+                        result = json.dumps(declined)
+                        tool_elapsed = 0.0
+                        audit.log_event(
+                            meta_dir, session, "tool_result",
+                            tool=tname, duration_s=0.0, result=declined,
+                        )
+                        preview = result if verbose else result[:200]
+                        print(f"  -> {tname} (declined by user)")
+                        print(f"     {preview}")
+                        history.append({"role": "tool", "content": result})
+                        continue
+                    args = confirmation
                 tool_t0 = time.time()
-                result = run_tool(tname, args, root, on_change)
+                result = run_tool(tname, args, root, on_change, shell_timeout=shell_timeout)
                 tool_elapsed = time.time() - tool_t0
                 try:
                     parsed = json.loads(result)

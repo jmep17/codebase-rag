@@ -236,10 +236,27 @@ def main() -> None:
         "--read-only",
         action="store_true",
         help=(
-            "Disable file-modifying tools for this session. write_file and edit_file "
-            "are not exposed to the model — only read_file and grep. Useful for "
-            "exploratory Q&A chats and as a guardrail against prompt injection."
+            "Disable file-modifying tools for this session. write_file, edit_file, "
+            "and run_shell are not exposed to the model — only read_file and grep. "
+            "Useful for exploratory Q&A chats and as a guardrail against prompt injection."
         ),
+    )
+    p_chat.add_argument(
+        "--allow-shell",
+        action="store_true",
+        help=(
+            "Enable the run_shell tool (model-driven) and the :run slash command "
+            "(user-driven). Model calls always prompt for confirmation before "
+            "executing. Commands run via shlex.split (no shell expansion). "
+            "Ignored if --read-only is also set."
+        ),
+    )
+    p_chat.add_argument(
+        "--shell-timeout",
+        type=float,
+        default=30.0,
+        metavar="SECONDS",
+        help="Per-command timeout for run_shell / :run (default: 30 seconds).",
     )
 
     args = parser.parse_args()
@@ -316,6 +333,8 @@ def main() -> None:
             verbose=args.verbose,
             resume=args.resume,
             read_only=args.read_only,
+            allow_shell=args.allow_shell,
+            shell_timeout=args.shell_timeout,
         )
 
 

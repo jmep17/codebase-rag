@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
+import shlex
+import subprocess
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -13,6 +17,8 @@ from .index import _find_nested_repos, _load_ignore_file, iter_source_files
 MAX_READ_BYTES = 200_000
 GREP_MAX_RESULTS = 300
 GREP_MAX_FILE_BYTES = 1_000_000
+SHELL_OUTPUT_CAP = 50_000
+SHELL_SAFE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "TMPDIR")
 
 UNTRUSTED_BEGIN = "<<<UNTRUSTED-BEGIN>>>"
 UNTRUSTED_END = "<<<UNTRUSTED-END>>>"
@@ -168,6 +174,77 @@ def grep(
     return result
 
 
+def _scrubbed_env() -> dict:
+    """Subset of host env preserved when launching subprocesses."""
+    return {k: v for k, v in os.environ.items() if k in SHELL_SAFE_ENV_KEYS}
+
+
+def _cap_output(text: str) -> tuple[str, bool]:
+    if len(text) > SHELL_OUTPUT_CAP:
+        head = text[:SHELL_OUTPUT_CAP]
+        return head + f"\n... [{len(text) - SHELL_OUTPUT_CAP} bytes truncated]", True
+    return text, False
+
+
+def run_shell(root: Path, command: str, *, timeout: float = 30) -> dict:
+    """Execute `command` in `root` with no shell expansion and a scrubbed env.
+
+    `command` is parsed via shlex.split so model content cannot trigger shell
+    metacharacters ($VAR, backticks, pipes, redirection). For multi-step flows
+    the model should issue multiple `run_shell` calls.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError as e:
+        return {"ok": False, "error": f"could not parse command: {e}", "command": command}
+    if not argv:
+        return {"ok": False, "error": "empty command", "command": command}
+    t0 = time.time()
+    try:
+        proc = subprocess.run(
+            argv,
+            cwd=str(root.resolve()),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=_scrubbed_env(),
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "error": f"command timed out after {timeout}s",
+            "command": command,
+            "runner": "host",
+        }
+    except FileNotFoundError as e:
+        return {
+            "ok": False,
+            "error": f"command not found: {e.filename or argv[0]}",
+            "command": command,
+            "runner": "host",
+        }
+    except OSError as e:
+        return {
+            "ok": False,
+            "error": f"could not run command: {e}",
+            "command": command,
+            "runner": "host",
+        }
+    duration = time.time() - t0
+    merged = (proc.stdout or "") + (proc.stderr or "")
+    capped, truncated = _cap_output(merged)
+    return {
+        "ok": proc.returncode == 0,
+        "command": command,
+        "runner": "host",
+        "exit_code": proc.returncode,
+        "duration_s": round(duration, 3),
+        "output": wrap_untrusted(capped) if capped else "",
+        "truncated": truncated,
+    }
+
+
 def edit_file(
     root: Path,
     path: str,
@@ -312,18 +389,51 @@ _SCHEMA_EDIT_FILE = {
 }
 
 
+_SCHEMA_RUN_SHELL = {
+    "type": "function",
+    "function": {
+        "name": "run_shell",
+        "description": (
+            "Execute a single command in the project root. The user will be asked "
+            "to confirm before each run. Use for running tests, linters, build "
+            "commands, formatters — anything that has a clear, finite output. "
+            "Output (stdout and stderr merged) is captured and returned, capped at 50KB. "
+            "Commands are parsed with shlex.split; shell features (pipes, $VAR "
+            "expansion, &&, ||, backticks, redirection) are NOT supported — for "
+            "multi-step flows, issue multiple calls."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": (
+                        "The command, e.g. 'pytest -q', 'ruff check codebase_rag', "
+                        "'npm test', 'cargo build --release'. Do NOT include shell "
+                        "syntax like pipes or && — those are passed literally and "
+                        "will fail."
+                    ),
+                },
+            },
+            "required": ["command"],
+        },
+    },
+}
+
+
 def tool_schemas_for(*, read_only: bool = False, allow_shell: bool = False, allow_web: bool = False) -> list[dict]:
     """Assemble the list of tool schemas exposed to the model for this session.
 
     - read_only=True: only read_file and grep are exposed (no write_file / edit_file / run_shell).
-    - allow_shell / allow_web are placeholders for Features 3 and 6; they don't add any
-      schemas yet but the flag plumbing lives here so those features can add their
-      schemas conditionally without touching callers.
+    - allow_shell=True: adds run_shell (subject to read_only).
+    - allow_web=True: placeholder for Feature 6; not active yet.
     """
     schemas: list[dict] = [_SCHEMA_READ_FILE, _SCHEMA_GREP]
     if not read_only:
         schemas.append(_SCHEMA_WRITE_FILE)
         schemas.append(_SCHEMA_EDIT_FILE)
+        if allow_shell:
+            schemas.append(_SCHEMA_RUN_SHELL)
     return schemas
 
 
@@ -331,12 +441,20 @@ def tool_schemas_for(*, read_only: bool = False, allow_shell: bool = False, allo
 TOOL_SCHEMAS = tool_schemas_for()
 
 
-def run_tool(name: str, args: dict, root: Path, on_change: Callable[[str], None]) -> str:
+def run_tool(
+    name: str,
+    args: dict,
+    root: Path,
+    on_change: Callable[[str], None],
+    *,
+    shell_timeout: float = 30,
+) -> str:
     impls = {
         "read_file": lambda: read_file(root, **args),
         "write_file": lambda: write_file(root, on_change=on_change, **args),
         "edit_file": lambda: edit_file(root, on_change=on_change, **args),
         "grep": lambda: grep(root, **args),
+        "run_shell": lambda: run_shell(root, timeout=shell_timeout, **args),
     }
     if name not in impls:
         return json.dumps({"ok": False, "error": f"unknown tool: {name}"})
