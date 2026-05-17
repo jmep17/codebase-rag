@@ -198,6 +198,15 @@ def main() -> None:
         action="store_true",
         help="Print the file paths and line ranges retrieved for each question.",
     )
+    p_chat.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help=(
+            "Print detailed timing and token-rate stats for every inference, plus full "
+            "tool results (instead of the 200-char preview)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -268,6 +277,7 @@ def main() -> None:
             root=args.root.resolve(),
             show_context=args.show_context,
             model=args.model,
+            verbose=args.verbose,
         )
 
 

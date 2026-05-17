@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 
 import chromadb
@@ -130,6 +131,64 @@ def _assistant_msg_from_response(msg) -> dict:
     return out
 
 
+def _stream_inference(
+    model: str,
+    messages: list,
+    tools: list,
+    options: dict,
+    *,
+    verbose: bool,
+) -> tuple[str, list, dict]:
+    """Stream a chat call; print content as it arrives. Return (content, tool_calls, stats)."""
+    t0 = time.time()
+    content = ""
+    tool_calls: list = []
+    last_chunk = None
+    for chunk in ollama.chat(
+        model=model,
+        messages=messages,
+        tools=tools,
+        options=options,
+        stream=True,
+    ):
+        msg = chunk.get("message") or {}
+        piece = msg.get("content") or ""
+        if piece:
+            print(piece, end="", flush=True)
+            content += piece
+        tcs = msg.get("tool_calls") or []
+        if tcs:
+            tool_calls.extend(tcs)
+        last_chunk = chunk
+    elapsed = time.time() - t0
+    if content and not content.endswith("\n"):
+        print()
+    stats = {
+        "elapsed": elapsed,
+        "prompt_tokens": (last_chunk or {}).get("prompt_eval_count") or 0,
+        "output_tokens": (last_chunk or {}).get("eval_count") or 0,
+        "prompt_eval_duration": ((last_chunk or {}).get("prompt_eval_duration") or 0) / 1e9,
+        "eval_duration": ((last_chunk or {}).get("eval_duration") or 0) / 1e9,
+        "load_duration": ((last_chunk or {}).get("load_duration") or 0) / 1e9,
+    }
+    if verbose:
+        prompt_rate = stats["prompt_tokens"] / stats["prompt_eval_duration"] if stats["prompt_eval_duration"] else 0
+        gen_rate = stats["output_tokens"] / stats["eval_duration"] if stats["eval_duration"] else 0
+        load_note = f", load {stats['load_duration']:.1f}s" if stats["load_duration"] > 0.05 else ""
+        print(
+            f"  [{stats['elapsed']:.1f}s · prompt {stats['prompt_tokens']} tok "
+            f"in {stats['prompt_eval_duration']:.2f}s ({prompt_rate:.0f} tok/s) · "
+            f"gen {stats['output_tokens']} tok in {stats['eval_duration']:.2f}s "
+            f"({gen_rate:.0f} tok/s){load_note}]"
+        )
+    else:
+        print(
+            f"  [{stats['elapsed']:.1f}s · {stats['prompt_tokens']} in → "
+            f"{stats['output_tokens']} out]"
+        )
+    return content, tool_calls, stats
+
+
 def _system_prompt_for(root: Path) -> str:
     """SYSTEM_PROMPT plus any project notes from the meta dir."""
     notes = read_notes(root).strip()
@@ -152,6 +211,7 @@ def agent_loop(
     *,
     show_context: bool = False,
     model: str | None = None,
+    verbose: bool = False,
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
@@ -195,13 +255,26 @@ def agent_loop(
             print("(history cleared)")
             continue
 
+        retrieve_t0 = time.time()
         chunks = retrieve(collection, user_input)
+        retrieve_elapsed = time.time() - retrieve_t0
         context = format_context(chunks)
 
+        if verbose:
+            project_count = sum(1 for c in chunks if (c.get("kind") or "project") == "project")
+            ref_count = len(chunks) - project_count
+            print(
+                f"[retrieve: {len(chunks)} chunks ({project_count} project, "
+                f"{ref_count} reference) in {retrieve_elapsed:.2f}s]"
+            )
+        else:
+            print(f"[retrieve: {len(chunks)} chunks · {retrieve_elapsed:.2f}s]")
+
         if show_context:
-            print("\n--- retrieved ---")
+            print("--- retrieved ---")
             for c in chunks:
-                print(f"  {c['path']}:{c['start_line']}-{c['end_line']}")
+                label = f"  [{c.get('label')}] " if c.get("kind") == "reference" else "  "
+                print(f"{label}{c['path']}:{c['start_line']}-{c['end_line']}")
             print("-----------------")
 
         augmented = (
@@ -209,13 +282,20 @@ def agent_loop(
         )
         history.append({"role": "user", "content": augmented})
 
+        user_turn_start = time.time()
+        total_prompt_tokens = 0
+        total_output_tokens = 0
+        inferences = 0
+
         for turn in range(MAX_TURNS):
+            inferences += 1
             try:
-                response = ollama.chat(
-                    model=chat_model,
-                    messages=history,
-                    tools=TOOL_SCHEMAS,
-                    options=CHAT_OPTIONS,
+                content, tool_calls, stats = _stream_inference(
+                    chat_model,
+                    history,
+                    TOOL_SCHEMAS,
+                    CHAT_OPTIONS,
+                    verbose=verbose,
                 )
             except ollama.ResponseError as e:
                 msg_text = str(e).lower()
@@ -228,13 +308,19 @@ def agent_loop(
                     print(f"\n(ollama error: {e})")
                 history.pop()
                 break
-            msg = response["message"]
-            history.append(_assistant_msg_from_response(msg))
 
-            tool_calls = msg.get("tool_calls") or []
+            total_prompt_tokens += stats["prompt_tokens"]
+            total_output_tokens += stats["output_tokens"]
+
+            history.append(
+                _assistant_msg_from_response(
+                    {"content": content, "tool_calls": tool_calls}
+                )
+            )
+
             if not tool_calls:
-                text = (msg.get("content") or "").strip()
-                print(text if text else "(no response)")
+                if not content.strip():
+                    print("(no response)")
                 break
 
             for call in tool_calls:
@@ -245,9 +331,21 @@ def agent_loop(
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {}
-                print(f"  -> {name}({', '.join(args.keys())})")
+                tool_t0 = time.time()
                 result = run_tool(name, args, root, on_change)
-                print(f"     {result[:200]}")
+                tool_elapsed = time.time() - tool_t0
+                preview = result if verbose else result[:200]
+                print(f"  -> {name}({', '.join(args.keys())}) [{tool_elapsed:.2f}s]")
+                print(f"     {preview}")
                 history.append({"role": "tool", "content": result})
         else:
             print(f"(stopped after {MAX_TURNS} tool-call rounds)")
+
+        turn_elapsed = time.time() - user_turn_start
+        summary_parts = [
+            f"turn: {turn_elapsed:.1f}s",
+            f"{inferences} inference{'s' if inferences != 1 else ''}",
+            f"{total_prompt_tokens} in → {total_output_tokens} out",
+            f"history: {len(history)} messages",
+        ]
+        print(f"[{' · '.join(summary_parts)}]")
