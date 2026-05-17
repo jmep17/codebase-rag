@@ -207,6 +207,15 @@ def main() -> None:
             "tool results (instead of the 200-char preview)."
         ),
     )
+    p_chat.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Continue the project's last conversation. Conversations auto-save after "
+            "every turn; --resume picks up where you left off. Use :forget mid-chat "
+            "to delete the saved conversation."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -278,6 +287,7 @@ def main() -> None:
             show_context=args.show_context,
             model=args.model,
             verbose=args.verbose,
+            resume=args.resume,
         )
 
 

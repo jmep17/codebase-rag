@@ -10,14 +10,52 @@ from pathlib import Path
 import chromadb
 import ollama
 
+from datetime import datetime, timezone
+
 from .index import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL,
     collection_name_for,
+    project_meta_dir,
     read_notes,
     reindex_file,
 )
 from .tools import TOOL_SCHEMAS, run_tool
+
+
+def _conversation_path(root: Path) -> Path:
+    return project_meta_dir(root) / "last_conversation.json"
+
+
+def _save_conversation(root: Path, history: list[dict], model: str) -> None:
+    """Persist the conversation to the project's meta dir (system message stripped)."""
+    path = _conversation_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    saved_msgs = [m for m in history if m.get("role") != "system"]
+    payload = {
+        "model": model,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "messages": saved_msgs,
+    }
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _load_conversation(root: Path) -> dict | None:
+    path = _conversation_path(root)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _clear_conversation(root: Path) -> None:
+    path = _conversation_path(root)
+    if path.is_file():
+        path.unlink()
 
 # Default chat model, overridable per call. Resolution order:
 #   1. `agent_loop(..., model=...)` argument
@@ -212,6 +250,7 @@ def agent_loop(
     show_context: bool = False,
     model: str | None = None,
     verbose: bool = False,
+    resume: bool = False,
 ) -> None:
     root = root.resolve()
     chat_model = _resolve_model(model)
@@ -233,11 +272,25 @@ def agent_loop(
 
     system_prompt = _system_prompt_for(root)
     history: list[dict] = [{"role": "system", "content": system_prompt}]
+    resumed_marker = ""
+    if resume:
+        saved = _load_conversation(root)
+        if saved and saved.get("messages"):
+            history.extend(saved["messages"])
+            saved_at = saved.get("saved_at", "?")
+            saved_model = saved.get("model", "?")
+            resumed_marker = (
+                f"\nResumed: {len(saved['messages'])} prior messages "
+                f"(saved {saved_at}, model {saved_model})"
+            )
+        else:
+            resumed_marker = "\n(--resume requested but no saved conversation found)"
     notes_marker = "with notes" if read_notes(root).strip() else "no notes"
     print(
         f"Chatting with {chat_model}.\n"
-        f"Project: {root}  (collection: {name}, {notes_marker})\n"
-        f"Type :q or Ctrl-D to exit, :reset to clear history."
+        f"Project: {root}  (collection: {name}, {notes_marker})"
+        f"{resumed_marker}\n"
+        f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
     )
 
     while True:
@@ -252,7 +305,13 @@ def agent_loop(
             return
         if user_input == ":reset":
             history = [{"role": "system", "content": _system_prompt_for(root)}]
+            _save_conversation(root, history, chat_model)
             print("(history cleared)")
+            continue
+        if user_input == ":forget":
+            history = [{"role": "system", "content": _system_prompt_for(root)}]
+            _clear_conversation(root)
+            print("(history cleared and saved conversation deleted)")
             continue
 
         retrieve_t0 = time.time()
@@ -349,3 +408,8 @@ def agent_loop(
             f"history: {len(history)} messages",
         ]
         print(f"[{' · '.join(summary_parts)}]")
+
+        try:
+            _save_conversation(root, history, chat_model)
+        except OSError as e:
+            print(f"(could not save conversation: {e})")
