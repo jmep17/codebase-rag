@@ -232,6 +232,15 @@ def main() -> None:
             "to delete the saved conversation."
         ),
     )
+    p_chat.add_argument(
+        "--read-only",
+        action="store_true",
+        help=(
+            "Disable file-modifying tools for this session. write_file and edit_file "
+            "are not exposed to the model — only read_file and grep. Useful for "
+            "exploratory Q&A chats and as a guardrail against prompt injection."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -306,6 +315,7 @@ def main() -> None:
             model=args.model,
             verbose=args.verbose,
             resume=args.resume,
+            read_only=args.read_only,
         )
 
 
