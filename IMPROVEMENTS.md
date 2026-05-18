@@ -7,6 +7,8 @@ as soon as the implementation or decision is complete.
 
 - [x] Create this improvement tracker.
 - [x] Add a `doctor` command for local environment checks.
+- [x] Improve TUI first-launch state, help overlay, turn selection, and visual hierarchy.
+- [x] Add enforced Conventional Commits, linting, and formatting workflow.
 - [ ] Add focused tests for `chat.agent_turn` confirmation and error events.
 - [ ] Add WebSocket transport tests for auth, confirmations, cancellation, and disconnects.
 
@@ -20,5 +22,4 @@ as soon as the implementation or decision is complete.
 - [ ] Tighten audit redaction for secrets, tokens, environment-like values, and
       command output.
 - [ ] Improve CLI help grouping and actionable setup errors.
-- [ ] Add dev tooling and CI for tests, linting, import-light checks, and CLI
-      smoke tests.
+- [ ] Add CI for tests, linting, import-light checks, and CLI smoke tests.

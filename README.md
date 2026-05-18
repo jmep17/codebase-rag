@@ -65,6 +65,43 @@ python -m pip install -e . --no-deps
 
 For Python environments that report an "externally managed environment" error, create and activate a virtual environment instead of installing into the system Python. `codebase-rag` requires Python 3.10+.
 
+## Development workflow
+
+Install the development extra to get the lint and format tooling:
+
+```bash
+python -m pip install -e .[dev]
+```
+
+Enable the committed git hooks in this checkout:
+
+```bash
+python scripts/install_hooks.py
+```
+
+The hooks enforce:
+
+- Conventional Commit headers, e.g. `feat(tui): add retrieval help overlay`.
+- `ruff format --check`.
+- `ruff check`.
+- The same Python AST smoke check used during local development.
+
+Run checks manually:
+
+```bash
+python scripts/check_quality.py        # check only
+python scripts/check_quality.py --fix  # format and apply safe lint fixes
+```
+
+Commit messages must use:
+
+```text
+<type>[optional scope][!]: <description>
+```
+
+Allowed types are `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+`refactor`, `revert`, `style`, and `test`.
+
 ## Usage
 
 Index a codebase:
