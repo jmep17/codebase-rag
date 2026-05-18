@@ -24,16 +24,15 @@ from __future__ import annotations
 
 import json
 import queue
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.events import Key
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Input, Static
@@ -44,9 +43,16 @@ from . import gitops
 
 HINT_TEXT = (
     "^R retrieval inspector   ^L audit overlay   ^K command palette   "
-    "/ slash menu   j/k walk turns   ? help"
+    "/ slash menu   j/k select turns when composer is unfocused   ? help"
 )
-COMPOSER_PLACEHOLDER = 'type a message — Enter to send · :q to quit'
+COMPOSER_PLACEHOLDER = "type a message — Enter to send · :q to quit"
+
+
+def _clip(text: str, limit: int) -> str:
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
 
 
 # --- Modals ---------------------------------------------------------------
@@ -207,6 +213,7 @@ class PaletteItem:
     """One row in a palette. `payload` is the value reported back to the
     caller's ``on_accept`` when the user hits Enter (for slash items this
     is the command prefix to insert; for command items this is a callable)."""
+
     name: str
     desc: str
     requires: str = ""
@@ -273,17 +280,16 @@ class PaletteModal(ModalScreen):
         self._filtered: list[PaletteItem] = list(items)
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="palette-modal"):
-            with Vertical(classes="palette"):
-                with Horizontal(classes="pHead"):
-                    yield Static(self._title, classes="gt")
-                    yield Input(value=self._initial, id="palette-input")
-                    yield Static("esc", classes="esc")
-                yield VerticalScroll(id="palette-list", classes="pList")
-                yield Static(
-                    "[#5b8b73]↑↓ navigate   ↵ run   tab complete   esc dismiss[/]",
-                    classes="pFoot",
-                )
+        with Vertical(classes="palette-modal"), Vertical(classes="palette"):
+            with Horizontal(classes="pHead"):
+                yield Static(self._title, classes="gt")
+                yield Input(value=self._initial, id="palette-input")
+                yield Static("esc", classes="esc")
+            yield VerticalScroll(id="palette-list", classes="pList")
+            yield Static(
+                "[#5b8b73]↑↓ navigate   ↵ run   tab complete   esc dismiss[/]",
+                classes="pFoot",
+            )
 
     def on_mount(self) -> None:
         self.query_one("#palette-input", Input).focus()
@@ -359,7 +365,7 @@ class RetrievalInspectorModal(ModalScreen):
         Binding("q", "dismiss", "Dismiss", show=False, priority=True),
     ]
 
-    def __init__(self, turn: "Turn | None", root: Path) -> None:
+    def __init__(self, turn: Turn | None, root: Path) -> None:
         super().__init__()
         self.turn = turn
         self.root = root
@@ -434,8 +440,10 @@ class RetrievalInspectorModal(ModalScreen):
             body = chunk.get("content") or ""
             lines = body.splitlines() or [""]
             head = f"[#5b8b73]{path}:{start}-{end} (file not on disk; showing indexed chunk)[/]"
-            return head + "\n" + "\n".join(
-                f"[#5b8b73]{start + i:5d}:[/] {ln}" for i, ln in enumerate(lines)
+            return (
+                head
+                + "\n"
+                + "\n".join(f"[#5b8b73]{start + i:5d}:[/] {ln}" for i, ln in enumerate(lines))
             )
         try:
             text = full.read_text(encoding="utf-8", errors="replace")
@@ -445,9 +453,7 @@ class RetrievalInspectorModal(ModalScreen):
         ctx_before, ctx_after = 3, 3
         lo = max(1, start - ctx_before)
         hi = min(len(all_lines), end + ctx_after)
-        out: list[str] = [
-            f"[#5b8b73]{path} (lines {lo}–{hi}, chunk lines {start}–{end})[/]"
-        ]
+        out: list[str] = [f"[#5b8b73]{path} (lines {lo}–{hi}, chunk lines {start}–{end})[/]"]
         for n in range(lo, hi + 1):
             mark = "▎" if start <= n <= end else " "
             color = "#4ade80" if start <= n <= end else "#5b8b73"
@@ -531,24 +537,25 @@ class AuditOverlayModal(ModalScreen):
     def _repaint(self) -> None:
         tool, event = self._current_filter()
         rows = audit_mod.tail_audit(
-            self.meta_dir, tool=tool, event=event, limit=0,
+            self.meta_dir,
+            tool=tool,
+            event=event,
+            limit=0,
         )
         rows = [r for r in rows if r.get("session") == self.session_id]
 
-        self.query_one("#audit-tool-chip", Static).update(
-            f"tool: [bold]{tool or 'any'}[/]"
-        )
-        self.query_one("#audit-event-chip", Static).update(
-            f"event: [bold]{event or 'any'}[/]"
-        )
+        self.query_one("#audit-tool-chip", Static).update(f"tool: [bold]{tool or 'any'}[/]")
+        self.query_one("#audit-event-chip", Static).update(f"event: [bold]{event or 'any'}[/]")
 
         list_node = self.query_one("#audit-list", VerticalScroll)
         list_node.remove_children()
         if not rows:
-            list_node.mount(Static(
-                "[#5b8b73](no events match — try `a` to clear filters)[/]",
-                classes="audit-empty",
-            ))
+            list_node.mount(
+                Static(
+                    "[#5b8b73](no events match — try `a` to clear filters)[/]",
+                    classes="audit-empty",
+                )
+            )
             return
         for r in rows:
             list_node.mount(Static(self._format_row(r), classes="audit-row"))
@@ -565,9 +572,7 @@ class AuditOverlayModal(ModalScreen):
         kind = row.get("event", "?")
         color = _AUDIT_KIND_COLOR.get(kind, "#98c9af")
         body = self._format_body(row)
-        return (
-            f"[#5b8b73]{time_str}[/]  [{color}]{kind:<14}[/]  {body}"
-        )
+        return f"[#5b8b73]{time_str}[/]  [{color}]{kind:<14}[/]  {body}"
 
     def _format_body(self, row: dict) -> str:
         event = row.get("event")
@@ -644,6 +649,60 @@ class AuditOverlayModal(ModalScreen):
         self.dismiss()
 
 
+class HelpModal(ModalScreen):
+    """Compact keyboard reference and current-session guardrails."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss", "Dismiss", priority=True),
+        Binding("q", "dismiss", "Dismiss", show=False, priority=True),
+        Binding("question_mark", "dismiss", "Dismiss", show=False, priority=True),
+    ]
+
+    def __init__(self, session: chat_mod.ChatSession) -> None:
+        super().__init__()
+        self.session = session
+
+    def compose(self) -> ComposeResult:
+        s = self.session
+        shell = "on" if s.allow_shell and not s.read_only else "off"
+        web = "on" if s.allow_web else "off"
+        writes = "confirm" if s.confirm_writes else "auto"
+        with Vertical(classes="help-modal"):
+            yield Static("[bold]? help[/]", classes="help-head")
+            yield Static(
+                f"[#5b8b73]project[/] {s.root}\n"
+                f"[#5b8b73]model[/] {s.chat_model} · {s.provider_name}  "
+                f"[#5b8b73]mode[/] {'read-only' if s.read_only else 'read+write'}  "
+                f"[#5b8b73]shell[/] {shell}  [#5b8b73]web[/] {web}  "
+                f"[#5b8b73]writes[/] {writes}",
+                classes="help-meta",
+            )
+            yield Static("[bold]Navigation[/]", classes="help-sec")
+            yield Static(
+                "j / k        select next / previous turn\n"
+                "^P           toggle project rail\n"
+                "^R           inspect retrieval for selected turn\n"
+                "^L           open audit overlay\n"
+                "^K           command palette\n"
+                "Esc / q      close overlays",
+                classes="help-body",
+            )
+            yield Static("[bold]Composer[/]", classes="help-sec")
+            yield Static(
+                "Enter        send message or slash command\n"
+                "/            open slash menu when composer is empty\n"
+                ":add PATH    pin file context\n"
+                ":drop PATH   remove pinned context\n"
+                ":reset       clear conversation history\n"
+                ":q           quit",
+                classes="help-body",
+            )
+            yield Static("[#5b8b73]esc to close[/]", classes="help-foot")
+
+    def action_dismiss(self) -> None:
+        self.dismiss()
+
+
 # --- Layout widgets -------------------------------------------------------
 
 
@@ -708,15 +767,23 @@ class ProjectsPane(VerticalScroll):
         self.session = session
 
     def compose(self) -> ComposeResult:
-        yield Static("PROJECTS · SESSIONS", classes="colHead")
+        yield Static("PROJECT", classes="colHead")
         try:
             chunk_count = self.session.collection.count()
         except Exception:
             chunk_count = 0
         name = self.session.root.name or str(self.session.root)
         meta = f"{chunk_count} chunks · {self.session.notes_marker}"
-        yield Static(f"[bold]{name}[/]\n[#5b8b73]{meta}[/]", classes="proj active")
-        yield Static("▸ now · this session", classes="session cur")
+        yield Static(
+            f"[bold]{name}[/]\n[#5b8b73]{meta}[/]\n[#3d5e4d]{self.session.root}[/]",
+            classes="proj active",
+        )
+        yield Static("SESSION", classes="secH")
+        yield Static("▸ live · " + self.session.session, classes="session cur")
+        yield Static(
+            f"provider  {self.session.provider_name}\nmodel     {_clip(self.session.chat_model, 18)}",
+            classes="side-kv",
+        )
 
 
 class ContextPane(VerticalScroll):
@@ -729,6 +796,18 @@ class ContextPane(VerticalScroll):
     def compose(self) -> ComposeResult:
         s = self.session
         yield Static("CONTEXT", classes="colHead")
+
+        yield Static("Mode", classes="secH")
+        shell = "on" if s.allow_shell and not s.read_only else "off"
+        web = "on" if s.allow_web else "off"
+        writes = "confirm" if s.confirm_writes else "auto"
+        yield Static(
+            f"[#5b8b73]access[/] {'read-only' if s.read_only else 'read+write'}\n"
+            f"[#5b8b73]shell[/]  {shell}\n"
+            f"[#5b8b73]web[/]    {web}\n"
+            f"[#5b8b73]writes[/] {writes}",
+            classes="side-kv",
+        )
 
         yield Static(f"Pinned ({len(s.pinned_paths)})", classes="secH")
         if not s.pinned_paths:
@@ -759,7 +838,8 @@ class ContextPane(VerticalScroll):
 
         yield Static("Session", classes="secH")
         yield Static(
-            f"[#5b8b73]id[/] {s.session}", classes="retrieval-last",
+            f"[#5b8b73]id[/] {s.session}",
+            classes="retrieval-last",
         )
 
 
@@ -814,7 +894,10 @@ class Turn(Vertical):
         self.retrieved_pinned = list(pinned)
         self.retrieved_elapsed = elapsed
         pin_note = f" · {len(pinned)} pinned" if pinned else ""
-        head = f"⟢ retrieved · {len(chunks)} chunks{pin_note} · {elapsed * 1000:.0f}ms"
+        head = (
+            f"[bold]⟢ retrieved[/]  {len(chunks)} chunks{pin_note}  "
+            f"[#5b8b73]{elapsed * 1000:.0f}ms · ^R inspect[/]"
+        )
         body_lines: list[str] = []
         if not chunks:
             body_lines.append("[#5b8b73](no retrieved chunks)[/]")
@@ -826,8 +909,9 @@ class Turn(Vertical):
                 lbl = c.get("label") or "ref"
                 tag = f"[#5b8b73]\\[{lbl}][/] "
             body_lines.append(
-                f"{tag}[#98c9af]{c['path']}:{c['start_line']}-{c['end_line']}[/]"
-                f"   [#4ade80]{score_text}[/]"
+                f"[#4ade80]{score_text:>4}[/]  "
+                f"{tag}[#98c9af]{_clip(c['path'], 58)}"
+                f":[#5b8b73]{c['start_line']}-{c['end_line']}[/]"
             )
         card = Static(head + "\n" + "\n".join(body_lines), classes="card retrieval")
         await self.mount(card)
@@ -884,10 +968,7 @@ class Turn(Vertical):
                 if k in summary:
                     detail = f" [#5b8b73]· {k}={summary[k]}[/]"
                     break
-        card.update(
-            f"[bold]⛁ {tname}[/]({argstr})  {status} "
-            f"[#5b8b73]· {elapsed:.2f}s[/]{detail}"
-        )
+        card.update(f"[bold]⛁ {tname}[/]({argstr})  {status} [#5b8b73]· {elapsed:.2f}s[/]{detail}")
 
     async def update_tool_card_declined(
         self,
@@ -899,9 +980,7 @@ class Turn(Vertical):
         if card is None:
             return
         argstr = ", ".join(args.keys()) if args else ""
-        card.update(
-            f"[bold]⛁ {tname}[/]({argstr})  [#f87171]· declined by user[/]"
-        )
+        card.update(f"[bold]⛁ {tname}[/]({argstr})  [#f87171]· declined by user[/]")
 
     async def add_marker(self, text: str, *, cls: str = "turn-meta") -> None:
         await self.mount(Static(text, classes=cls))
@@ -933,6 +1012,9 @@ class CodebaseRagApp(App):
         Binding("ctrl+k", "open_command_palette", "Command palette", priority=True),
         Binding("ctrl+r", "open_retrieval_inspector", "Retrieval inspector", priority=True),
         Binding("ctrl+l", "open_audit_overlay", "Audit overlay", priority=True),
+        Binding("j", "focus_next_turn", "Next turn", show=False),
+        Binding("k", "focus_prev_turn", "Previous turn", show=False),
+        Binding("question_mark", "help_key", "Help", priority=True),
         # Priority on "slash" so we beat the composer's Input widget to the
         # keystroke when the field is empty.
         Binding("slash", "slash_key", "Slash menu", priority=True),
@@ -946,6 +1028,8 @@ class CodebaseRagApp(App):
         self._active_turn: Turn | None = None
         self._pending_tool_key: int | None = None
         self._shield: ShieldBar | None = None
+        self._turns: list[Turn] = []
+        self._focused_turn_idx: int = -1
 
     def compose(self) -> ComposeResult:
         self._shield = ShieldBar(self.session, id="shield")
@@ -959,10 +1043,68 @@ class CodebaseRagApp(App):
             yield ContextPane(self.session, id="context")
 
     def on_mount(self) -> None:
+        self._install_welcome()
         self.query_one("#composer-input", Input).focus()
+
+    def _install_welcome(self) -> None:
+        conv = self.query_one("#conversation", VerticalScroll)
+        try:
+            chunk_count = self.session.collection.count()
+        except Exception:
+            chunk_count = 0
+        shell = "on" if self.session.allow_shell and not self.session.read_only else "off"
+        web = "on" if self.session.allow_web else "off"
+        conv.mount(
+            Static(
+                "[bold]codebase-rag[/]\n"
+                f"[#98c9af]{self.session.root}[/]\n\n"
+                f"[#5b8b73]index[/] {chunk_count} chunks   "
+                f"[#5b8b73]mode[/] {'read-only' if self.session.read_only else 'read+write'}   "
+                f"[#5b8b73]shell[/] {shell}   [#5b8b73]web[/] {web}\n\n"
+                "Ask about the codebase or type [bold]/[/] for commands.",
+                id="welcome",
+                classes="welcome",
+            )
+        )
 
     def action_toggle_projects(self) -> None:
         self.query_one("#projects").toggle_class("hidden")
+
+    def action_help_key(self) -> None:
+        try:
+            inp = self.query_one("#composer-input", Input)
+        except Exception:
+            self.action_open_help()
+            return
+        if inp.has_focus and (inp.value or "") != "":
+            inp.insert_text_at_cursor("?")
+            return
+        self.action_open_help()
+
+    def action_open_help(self) -> None:
+        self.push_screen(HelpModal(self.session))
+
+    def action_focus_next_turn(self) -> None:
+        self._move_turn_focus(1)
+
+    def action_focus_prev_turn(self) -> None:
+        self._move_turn_focus(-1)
+
+    def _move_turn_focus(self, delta: int) -> None:
+        if not self._turns:
+            return
+        if self._focused_turn_idx < 0:
+            self._focused_turn_idx = len(self._turns) - 1
+        else:
+            self._focused_turn_idx = (self._focused_turn_idx + delta) % len(self._turns)
+        self._paint_turn_focus()
+
+    def _paint_turn_focus(self) -> None:
+        for i, turn in enumerate(self._turns):
+            turn.set_class(i == self._focused_turn_idx, "focused")
+        if 0 <= self._focused_turn_idx < len(self._turns):
+            self._active_turn = self._turns[self._focused_turn_idx]
+            self._turns[self._focused_turn_idx].scroll_visible(animate=False)
 
     # --- Slash palette: opened by typing "/" in the composer -------------
 
@@ -986,10 +1128,14 @@ class CodebaseRagApp(App):
             PaletteItem(spec.name, spec.desc, spec.requires, payload=spec)
             for spec in chat_mod.SLASH_SPECS
         ]
-        self.push_screen(PaletteModal(
-            items, title="/", initial="",
-            on_accept=self._slash_accepted,
-        ))
+        self.push_screen(
+            PaletteModal(
+                items,
+                title="/",
+                initial="",
+                on_accept=self._slash_accepted,
+            )
+        )
 
     def _slash_accepted(self, item: PaletteItem, query: str) -> None:
         """Drop the matched command (plus a space when it takes an arg) into
@@ -1019,19 +1165,37 @@ class CodebaseRagApp(App):
 
     def action_open_command_palette(self) -> None:
         items: list[PaletteItem] = [
-            PaletteItem(":switch-project",     "switch to a different indexed project",        requires="not impl"),
-            PaletteItem(":toggle-read-only",   "flip read-only on/off (rebuilds tool list)",   payload="toggle_read_only"),
-            PaletteItem(":toggle-confirm-writes", "flip write/edit confirmation on/off",        payload="toggle_confirm_writes"),
-            PaletteItem(":open-audit",         "open the audit-log overlay",                   payload="open_audit"),
-            PaletteItem(":open-retrieval",     "open the retrieval inspector for last turn",   payload="open_retrieval"),
+            PaletteItem(
+                ":switch-project", "switch to a different indexed project", requires="not impl"
+            ),
+            PaletteItem(
+                ":toggle-read-only",
+                "flip read-only on/off (rebuilds tool list)",
+                payload="toggle_read_only",
+            ),
+            PaletteItem(
+                ":toggle-confirm-writes",
+                "flip write/edit confirmation on/off",
+                payload="toggle_confirm_writes",
+            ),
+            PaletteItem(":open-audit", "open the audit-log overlay", payload="open_audit"),
+            PaletteItem(
+                ":open-retrieval",
+                "open the retrieval inspector for last turn",
+                payload="open_retrieval",
+            ),
         ] + [
             PaletteItem(spec.name, spec.desc, spec.requires, payload=spec)
             for spec in chat_mod.SLASH_SPECS
         ]
-        self.push_screen(PaletteModal(
-            items, title="⌘", initial="",
-            on_accept=self._command_accepted,
-        ))
+        self.push_screen(
+            PaletteModal(
+                items,
+                title="⌘",
+                initial="",
+                on_accept=self._command_accepted,
+            )
+        )
 
     def _command_accepted(self, item: PaletteItem, query: str) -> None:
         payload = item.payload
@@ -1055,6 +1219,7 @@ class CodebaseRagApp(App):
 
     def _rebuild_tool_schemas(self) -> None:
         from .tools import tool_schemas_for
+
         s = self.session
         s.tool_schemas = tool_schemas_for(
             read_only=s.read_only,
@@ -1186,10 +1351,17 @@ class CodebaseRagApp(App):
 
     def _start_turn(self, user_input: str) -> None:
         conv = self.query_one("#conversation", VerticalScroll)
+        try:
+            self.query_one("#welcome").add_class("hidden")
+        except Exception:
+            pass
         turn = Turn(user_input)
+        self._turns.append(turn)
+        self._focused_turn_idx = len(self._turns) - 1
         self._active_turn = turn
         self._pending_tool_key = None
         conv.mount(turn)
+        self._paint_turn_focus()
         conv.scroll_end(animate=False)
 
     def _handle_event(self, event: tuple) -> None:
@@ -1210,9 +1382,11 @@ class CodebaseRagApp(App):
             )
         elif kind == "tool_call_request":
             _, tname, args = event
+
             async def _add_and_remember() -> None:
                 key = await turn.add_tool_card(tname, args)
                 self._pending_tool_key = key
+
             self.run_worker(_add_and_remember(), exclusive=False)
         elif kind == "tool_result":
             _, tname, args, _raw, summary, elapsed = event
@@ -1239,9 +1413,7 @@ class CodebaseRagApp(App):
             )
         elif kind == "architect_error":
             self.run_worker(
-                turn.add_marker(
-                    f"[#f87171](architect error: {event[1]}; falling back)[/]"
-                ),
+                turn.add_marker(f"[#f87171](architect error: {event[1]}; falling back)[/]"),
                 exclusive=False,
             )
         elif kind == "empty_response":
@@ -1312,14 +1484,25 @@ def run_tui(
 ) -> None:
     """Launch the TUI against a real ChatSession."""
     session = chat_mod.init_chat_session(
-        db_path, root,
-        model=model, show_context=show_context, verbose=verbose, resume=resume,
-        read_only=read_only, allow_shell=allow_shell,
-        shell_timeout=shell_timeout, shell_runner=shell_runner,
-        shell_network=shell_network, confirm_writes=confirm_writes,
-        allow_web=allow_web, web_allow=web_allow, web_block=web_block,
-        searxng_url=searxng_url, architect_model=architect_model,
-        provider_name=provider_name, api_key=api_key,
+        db_path,
+        root,
+        model=model,
+        show_context=show_context,
+        verbose=verbose,
+        resume=resume,
+        read_only=read_only,
+        allow_shell=allow_shell,
+        shell_timeout=shell_timeout,
+        shell_runner=shell_runner,
+        shell_network=shell_network,
+        confirm_writes=confirm_writes,
+        allow_web=allow_web,
+        web_allow=web_allow,
+        web_block=web_block,
+        searxng_url=searxng_url,
+        architect_model=architect_model,
+        provider_name=provider_name,
+        api_key=api_key,
     )
     if session is None:
         return

@@ -46,7 +46,7 @@ Screen {
     height: 1fr;
 }
 #projects {
-    width: 28;
+    width: 30;
     background: $bg-0;
     border-right: tall $border-soft;
     padding: 0 1;
@@ -55,7 +55,7 @@ Screen {
     width: 1fr;
 }
 #context {
-    width: 32;
+    width: 34;
     background: $bg-0;
     border-left: tall $border-soft;
     padding: 0 1;
@@ -74,6 +74,16 @@ Turn {
     height: auto;
     margin-bottom: 1;
 }
+.turn {
+    height: auto;
+    margin-bottom: 1;
+    padding: 0 0 0 1;
+    border-left: tall $border-soft;
+}
+.turn.focused {
+    border-left: thick $accent;
+    background: #07100b;
+}
 .user {
     color: $fg-0;
     text-style: bold;
@@ -87,13 +97,18 @@ Turn {
 .card {
     height: auto;
     background: $bg-1;
-    padding: 0 1;
+    padding: 1 1;
     margin-bottom: 1;
+    border: tall $border-soft;
     border-left: thick $border-c;
 }
 .card.retrieval { border-left: thick $info; }
 .card.tool      { border-left: thick $purple; }
-.card.answer    { border-left: thick $accent; padding: 1; }
+.card.answer    {
+    border-left: thick $accent;
+    padding: 1 2;
+    color: $fg-0;
+}
 
 .cardHead {
     color: $fg-1;
@@ -111,6 +126,16 @@ Horizontal.chunk.ref .chunk-score { color: $fg-2; }
 
 .tool-head   { width: 1fr; color: $fg-1; }
 .tool-status { width: auto; }
+
+.welcome {
+    height: auto;
+    background: $bg-1;
+    border: tall $border-soft;
+    border-left: thick $accent;
+    color: $fg-1;
+    padding: 2 3;
+    margin: 1 0;
+}
 
 /* --- Projects pane ------------------------------------------------------ */
 
@@ -137,6 +162,14 @@ Horizontal.chunk.ref .chunk-score { color: $fg-2; }
     padding: 0 2;
 }
 .session.cur { color: $accent; }
+.side-kv {
+    height: auto;
+    color: $fg-1;
+    background: $bg-1;
+    border-left: thick $border-c;
+    padding: 1;
+    margin: 0 0 1 0;
+}
 .newBtn {
     height: 1;
     color: $accent;
@@ -147,10 +180,10 @@ Horizontal.chunk.ref .chunk-score { color: $fg-2; }
 /* --- Composer + hint bar ----------------------------------------------- */
 
 #composer {
-    height: 5;
+    height: 6;
     background: $bg-1;
     border-top: tall $border-c;
-    padding: 0 1;
+    padding: 1 1 0 1;
 }
 .pinned-row {
     height: 1;
@@ -179,6 +212,10 @@ Horizontal.chunk.ref .chunk-score { color: $fg-2; }
     background: $bg-0;
     color: $fg-0;
     border: tall $border-c;
+    padding: 0 1;
+}
+#composer-input:focus {
+    border: tall $border-hot;
 }
 
 #hintbar {
@@ -272,11 +309,6 @@ ModalScreen {
 }
 
 /* --- Per-turn container ------------------------------------------------ */
-
-.turn {
-    height: auto;
-    margin-bottom: 1;
-}
 
 .slash-line {
     height: auto;
@@ -507,4 +539,52 @@ Horizontal.pItem.sel {
     padding: 0 2;
     background: $bg-1;
     border-top: solid $border-soft;
+}
+
+/* --- Help modal -------------------------------------------------------- */
+
+.help-modal {
+    width: 84;
+    max-height: 86%;
+    height: auto;
+    background: $bg-1;
+    border: tall $border-hot;
+    padding: 1 2;
+}
+
+.help-head {
+    height: 1;
+    color: $accent;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+.help-meta {
+    height: auto;
+    color: $fg-1;
+    background: $bg-0;
+    border-left: thick $accent;
+    padding: 1 2;
+    margin: 0 0 1 0;
+}
+
+.help-sec {
+    height: 1;
+    color: $fg-2;
+    background: $bg-2;
+    padding: 0 1;
+    margin: 1 0 0 0;
+}
+
+.help-body {
+    height: auto;
+    color: $fg-1;
+    background: $bg-0;
+    padding: 1 2;
+}
+
+.help-foot {
+    height: 1;
+    color: $fg-2;
+    padding: 1 0 0 0;
 }
