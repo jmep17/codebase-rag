@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import audit as audit_mod
 from . import chat as chat_mod
+from . import diagnostics as diagnostics_mod
 from . import index as index_mod
 from . import training as training_mod
 
@@ -199,6 +200,60 @@ def main() -> None:
         help="Append a line of text to notes. Use '-' to read from stdin.",
     )
     notes_group.add_argument("--clear", action="store_true", help="Delete the notes file.")
+
+    p_diagnostics = subparsers.add_parser(
+        "diagnostics",
+        help="View or update cached IDE/LSP diagnostics for a project.",
+    )
+    p_diagnostics.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root these diagnostics belong to (default: current working directory).",
+    )
+    diagnostics_group = p_diagnostics.add_mutually_exclusive_group()
+    diagnostics_group.add_argument(
+        "--set",
+        dest="set_json",
+        type=str,
+        metavar="PATH|-",
+        help="Replace diagnostics from a JSON file, or '-' to read JSON from stdin.",
+    )
+    diagnostics_group.add_argument(
+        "--clear",
+        action="store_true",
+        help="Delete cached diagnostics for this project.",
+    )
+    p_diagnostics.add_argument(
+        "--path",
+        dest="path_filter",
+        type=str,
+        default=None,
+        help="Show diagnostics for one project-relative path.",
+    )
+    p_diagnostics.add_argument(
+        "--severity",
+        type=str,
+        default=None,
+        help="Show diagnostics with this severity, e.g. error or warning.",
+    )
+    p_diagnostics.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Show diagnostics from one source, e.g. pyright or typescript.",
+    )
+    p_diagnostics.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum diagnostics to print (default: 100, capped at 500).",
+    )
+    p_diagnostics.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the cache result as JSON.",
+    )
 
     p_train = subparsers.add_parser(
         "train",
@@ -387,7 +442,7 @@ def main() -> None:
         help=(
             "Disable file-modifying tools for this session. create_project, "
             "write_file, edit_file, and run_shell are not exposed to the model — "
-            "only read_file and grep. "
+            "only read_file, grep, and get_diagnostics. "
             "Useful for exploratory Q&A chats and as a guardrail against prompt injection."
         ),
     )
@@ -667,6 +722,8 @@ def main() -> None:
         index_mod.show_file(args.db, args.file, root=args.root.resolve())
     elif args.command == "notes":
         _handle_notes(args)
+    elif args.command == "diagnostics":
+        _handle_diagnostics(args)
     elif args.command == "train":
         _handle_train(args)
     elif args.command == "add-reference":
@@ -1055,6 +1112,74 @@ def _handle_notes(args: argparse.Namespace) -> None:
         print(f"File would be: {index_mod.project_meta_dir(root) / 'notes.md'}")
         return
     print(existing.rstrip("\n"))
+
+
+def _handle_diagnostics(args: argparse.Namespace) -> None:
+    if not args.root.exists():
+        print(f"Project root does not exist: {args.root}", file=sys.stderr)
+        sys.exit(1)
+    root = args.root.resolve()
+
+    if args.clear:
+        if diagnostics_mod.clear_diagnostics(root):
+            print(f"Cleared diagnostics for {root}.")
+        else:
+            print(f"No diagnostics to clear for {root}.")
+        return
+
+    if args.set_json is not None:
+        try:
+            raw = (
+                sys.stdin.read()
+                if args.set_json == "-"
+                else Path(args.set_json).read_text(encoding="utf-8")
+            )
+            payload = json.loads(raw)
+            result = diagnostics_mod.write_diagnostics(root, payload)
+        except (OSError, ValueError, json.JSONDecodeError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            sys.exit(1)
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(
+                f"Diagnostics saved to {result['path']} "
+                f"({result['count']} stored, {result['skipped']} skipped)."
+            )
+        return
+
+    result = diagnostics_mod.read_diagnostics(
+        root,
+        path=args.path_filter,
+        severity=args.severity,
+        source=args.source,
+        limit=args.limit,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2))
+        return
+    if not result.get("ok"):
+        print(f"error: {result.get('error', 'unknown error')}", file=sys.stderr)
+        sys.exit(1)
+    if not result.get("diagnostics"):
+        print(f"(no diagnostics for {root})")
+        print(f"File would be: {diagnostics_mod.diagnostics_path(root)}")
+        return
+    updated = result.get("updated_at") or "unknown"
+    print(f"Diagnostics for {root}  updated: {updated}  count: {result['count']}")
+    for item in result["diagnostics"]:
+        rng = item.get("range") or {}
+        start = rng.get("start") or [0, 0]
+        line = start[0] if len(start) > 0 else 0
+        col = start[1] if len(start) > 1 else 0
+        source = f" {item.get('source')}" if item.get("source") else ""
+        code = f" {item.get('code')}" if item.get("code") else ""
+        print(
+            f"{item.get('path')}:{line}:{col}: "
+            f"{item.get('severity', 'unknown')}{source}{code}: {item.get('message')}"
+        )
+    if result.get("truncated"):
+        print("(truncated; raise --limit to show more, max 500)")
 
 
 def _handle_train(args: argparse.Namespace) -> None:

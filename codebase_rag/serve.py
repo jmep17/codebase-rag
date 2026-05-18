@@ -27,6 +27,7 @@ import chromadb
 
 from . import audit as audit_mod
 from . import chat as chat_mod
+from . import diagnostics as diagnostics_mod
 from . import index as index_mod
 from .tools import MAX_READ_BYTES, resolve_safe
 
@@ -480,6 +481,49 @@ def create_app(
             limit=limit,
         )
         return JSONResponse({"events": events})
+
+    async def get_diagnostics(request):
+        slug = request.path_params["slug"]
+        resolved = await asyncio.to_thread(_resolve_project, db_path, slug)
+        if resolved is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        root, _ = resolved
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+        except ValueError:
+            limit = 100
+        result = await asyncio.to_thread(
+            diagnostics_mod.read_diagnostics,
+            root,
+            path=request.query_params.get("path"),
+            severity=request.query_params.get("severity"),
+            source=request.query_params.get("source"),
+            limit=limit,
+        )
+        status = 200 if result.get("ok") else 500
+        return JSONResponse(result, status_code=status)
+
+    async def put_diagnostics(request):
+        slug = request.path_params["slug"]
+        resolved = await asyncio.to_thread(_resolve_project, db_path, slug)
+        if resolved is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        root, _ = resolved
+        try:
+            payload = await request.json()
+            result = await asyncio.to_thread(diagnostics_mod.write_diagnostics, root, payload)
+        except (ValueError, json.JSONDecodeError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return JSONResponse(result)
+
+    async def delete_diagnostics(request):
+        slug = request.path_params["slug"]
+        resolved = await asyncio.to_thread(_resolve_project, db_path, slug)
+        if resolved is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        root, _ = resolved
+        cleared = await asyncio.to_thread(diagnostics_mod.clear_diagnostics, root)
+        return JSONResponse({"ok": True, "cleared": cleared})
 
     async def search(request):
         slug = request.query_params.get("project") or ""
@@ -959,6 +1003,9 @@ def create_app(
         Route("/api/projects/{slug}", get_project, methods=["GET"]),
         Route("/api/projects/{slug}/sessions", list_sessions, methods=["GET"]),
         Route("/api/projects/{slug}/audit", get_audit, methods=["GET"]),
+        Route("/api/projects/{slug}/diagnostics", get_diagnostics, methods=["GET"]),
+        Route("/api/projects/{slug}/diagnostics", put_diagnostics, methods=["PUT"]),
+        Route("/api/projects/{slug}/diagnostics", delete_diagnostics, methods=["DELETE"]),
         Route("/api/projects/{slug}/index", start_index, methods=["POST"]),
         Route("/api/search", search, methods=["GET"]),
         Route("/api/file", read_file_handler, methods=["GET"]),
@@ -976,7 +1023,7 @@ def create_app(
             Middleware(
                 CORSMiddleware,
                 allow_origin_regex=CORS_ORIGIN_RE,
-                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
                 allow_headers=["Authorization", "Content-Type"],
                 allow_credentials=False,
             ),

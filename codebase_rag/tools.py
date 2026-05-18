@@ -275,6 +275,34 @@ def grep(
     return result
 
 
+def get_diagnostics(
+    root: Path,
+    path: str | None = None,
+    severity: str | None = None,
+    source: str | None = None,
+    limit: int = 100,
+) -> dict:
+    """Read cached IDE/LSP diagnostics for this project."""
+    from . import diagnostics as diagnostics_mod
+
+    result = diagnostics_mod.read_diagnostics(
+        root,
+        path=path,
+        severity=severity,
+        source=source,
+        limit=limit,
+    )
+    if result.get("ok") and isinstance(result.get("diagnostics"), list):
+        safe_items = []
+        for item in result["diagnostics"]:
+            safe = dict(item)
+            if safe.get("message"):
+                safe["message"] = wrap_untrusted(str(safe["message"]))
+            safe_items.append(safe)
+        result["diagnostics"] = safe_items
+    return result
+
+
 def _scrubbed_env() -> dict:
     """Subset of host env preserved when launching subprocesses."""
     return {k: v for k, v in os.environ.items() if k in SHELL_SAFE_ENV_KEYS}
@@ -621,6 +649,40 @@ _SCHEMA_GREP = {
     },
 }
 
+_SCHEMA_GET_DIAGNOSTICS = {
+    "type": "function",
+    "function": {
+        "name": "get_diagnostics",
+        "description": (
+            "Read cached IDE/LSP Problems diagnostics for this project. "
+            "Use before or after edits when type errors, linter errors, or IDE-only "
+            "problems are relevant. Diagnostic messages are wrapped in "
+            "<<<UNTRUSTED-BEGIN>>>/<<<UNTRUSTED-END>>> markers."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Optional project-relative path to filter diagnostics.",
+                },
+                "severity": {
+                    "type": "string",
+                    "description": "Optional severity filter: error, warning, information, or hint.",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Optional source filter such as typescript, pyright, ruff, or eslint.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum diagnostics to return, capped at 500. Default 100.",
+                },
+            },
+        },
+    },
+}
+
 _SCHEMA_EDIT_FILE = {
     "type": "function",
     "function": {
@@ -723,11 +785,11 @@ def tool_schemas_for(
 ) -> list[dict]:
     """Assemble the list of tool schemas exposed to the model for this session.
 
-    - read_only=True: only read_file, grep, and (if allow_web) web tools are exposed.
+    - read_only=True: only read_file, grep, get_diagnostics, and (if allow_web) web tools are exposed.
     - allow_shell=True: adds run_shell (suppressed by read_only).
     - allow_web=True: adds web_search and web_fetch.
     """
-    schemas: list[dict] = [_SCHEMA_READ_FILE, _SCHEMA_GREP]
+    schemas: list[dict] = [_SCHEMA_READ_FILE, _SCHEMA_GREP, _SCHEMA_GET_DIAGNOSTICS]
     if not read_only:
         schemas.append(_SCHEMA_CREATE_PROJECT)
         schemas.append(_SCHEMA_WRITE_FILE)
@@ -764,6 +826,7 @@ def run_tool(
         "write_file": lambda: write_file(root, on_change=on_change, **args),
         "edit_file": lambda: edit_file(root, on_change=on_change, **args),
         "grep": lambda: grep(root, **args),
+        "get_diagnostics": lambda: get_diagnostics(root, **args),
         "run_shell": lambda: run_shell(
             root,
             timeout=shell_timeout,

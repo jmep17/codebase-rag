@@ -207,7 +207,7 @@ Each indexed project lives in its own ChromaDB collection, keyed by the absolute
 
 ## CLI flag reference
 
-Most commands accept either a project root (`--root` / `--for-project`) or database path (`--db`). The default database is `~/.codebase-rag/db`; project-specific metadata such as notes, conversations, web cache, and audit logs lives under `~/.codebase-rag/meta/<project-hash>/`.
+Most commands accept either a project root (`--root` / `--for-project`) or database path (`--db`). The default database is `~/.codebase-rag/db`; project-specific metadata such as notes, IDE diagnostics, conversations, web cache, and audit logs lives under `~/.codebase-rag/meta/<project-hash>/`.
 
 ### Indexing and retrieval
 
@@ -226,6 +226,45 @@ Most commands accept either a project root (`--root` / `--for-project`) or datab
 | `search QUERY` | `--headers-only` | Print only file/line headers, not chunk text. | `codebase-rag search 'auth' --headers-only` |
 | `show GLOB` | `--db PATH` | Read chunks from a non-default DB. | `codebase-rag show 'src/*.py' --db ~/.cache/cbr/app-db` |
 | `show GLOB` | `--root PATH` | Show indexed chunks for a project other than the current directory. | `codebase-rag show 'src/auth.py' --root ~/code/app` |
+
+### IDE diagnostics
+
+`codebase-rag` can read a local cache of IDE/LSP "Problems" through the `get_diagnostics` tool. The cache lives outside the repo at `~/.codebase-rag/meta/<project-hash>/diagnostics.json`; nothing is written into the project.
+
+Publish diagnostics from an editor bridge or script:
+
+```bash
+codebase-rag diagnostics --root ~/code/app --set diagnostics.json
+# or
+codebase-rag diagnostics --root ~/code/app --set - < diagnostics.json
+```
+
+The JSON may be a list, or an object with `diagnostics`, `items`, or `problems`:
+
+```json
+{
+  "diagnostics": [
+    {
+      "uri": "file:///Users/you/code/app/src/main.ts",
+      "range": { "start": [12, 4], "end": [12, 19] },
+      "severity": "error",
+      "source": "typescript",
+      "code": "TS2322",
+      "message": "Type 'string' is not assignable to type 'number'."
+    }
+  ]
+}
+```
+
+View or clear the cache:
+
+```bash
+codebase-rag diagnostics --root ~/code/app
+codebase-rag diagnostics --root ~/code/app --severity error --json
+codebase-rag diagnostics --root ~/code/app --clear
+```
+
+When `codebase-rag serve` is running, an IDE extension can also `PUT` the same JSON to `/api/projects/<slug>/diagnostics` with `Authorization: Bearer <token>`. The VS Code APIs to feed this are `vscode.languages.getDiagnostics()` and `vscode.languages.onDidChangeDiagnostics(...)`.
 
 ### Project notes and references
 
@@ -491,7 +530,7 @@ codebase-rag audit --since '2h'         # also: today, yesterday, 15m, 7d, ISO d
 codebase-rag audit --event tool_call --pretty
 ```
 
-The model has these tools (subset depending on flags): `read_file`, `grep`, `create_project`, `write_file`, `edit_file`, plus `run_shell` with `--allow-shell` and `web_search` / `web_fetch` with `--allow-web`.
+The model has these tools (subset depending on flags): `read_file`, `grep`, `get_diagnostics`, `create_project`, `write_file`, `edit_file`, plus `run_shell` with `--allow-shell` and `web_search` / `web_fetch` with `--allow-web`.
 
 After every successful project creation, write, or edit, the affected files are automatically re-chunked and the index is updated — no manual `reindex` needed for edits the agent makes. If `create_project` is used to start a standalone project, index that new directory and restart chat with `--root` pointing at it.
 
@@ -520,7 +559,7 @@ codebase-rag chat --db ~/.codebase-rag/project-a --root ~/code/project-a
 2. **Chunk** each file into 50-line windows with 10-line overlap, keyed by `path:start-end`.
 3. **Embed** each chunk via Ollama's `nomic-embed-text` (batched 32 at a time).
 4. **Store** the vectors in a local Chroma collection.
-5. At query time, embed the question, retrieve the top 8 nearest chunks, and call `mistral-nemo` with `tools=[read_file, create_project, write_file, edit_file]` and the chunks as a `Context:` block.
+5. At query time, embed the question, retrieve the top 8 nearest chunks, and call `mistral-nemo` with tools like `read_file`, `grep`, `get_diagnostics`, `create_project`, `write_file`, and `edit_file` and the chunks as a `Context:` block.
 6. If the model emits tool calls, execute them (sandboxed under `--root`), feed each JSON result back as a `role: "tool"` message, and re-call the model. Loop until it stops emitting tool calls. Each successful `create_project`, `write_file`, or `edit_file` re-chunks affected files.
 
 The system prompt forbids the model from claiming a write succeeded until it sees a tool result with `"ok": true`, and forbids placeholders like `"..."` or `"[rest omitted]"` in file content.
@@ -531,6 +570,7 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | ------------ | --------------------------------- | ----------------------------------------------------------------------- | --- |
 | `read_file`  | `path`                            | Returns full file content (wrapped in untrusted markers). Refuses files over 200KB. | always |
 | `grep`       | `pattern`, `file_glob?`, `literal?` | Regex-search every source file. Caps at 300 matches. **Use this for "list every / find all" queries.** | always |
+| `get_diagnostics` | `path?`, `severity?`, `source?`, `limit?` | Read cached IDE/LSP Problems diagnostics from the per-project metadata dir. Messages are wrapped in untrusted markers. | always |
 | `create_project` | `project_path`, `description?`, `files?`, `overwrite?` | Prompts by default, then creates a new directory under `--root` with starter files. Returns commands to index and chat with it as its own project. | not `--read-only` |
 | `write_file` | `path`, `content`                 | Prompts by default, then overwrites the file. Reads it back and reports bytes/lines written. | not `--read-only` |
 | `edit_file`  | `path`, `old_string`, `new_string`| Prompts by default, then replaces exactly one occurrence; errors on missing or ambiguous match. | not `--read-only` |
