@@ -10,3 +10,8 @@ dist/
 .idea/
 .vscode/
 .aider*
+.claude/
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+*.local.md
