@@ -6,7 +6,7 @@ import fnmatch
 import hashlib
 import re
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Any, Callable, Iterator, Sequence
 
 import chromadb
 import ollama
@@ -391,6 +391,64 @@ def stats(db_path: Path, root: Path | None = None) -> None:
         )
 
 
+def _search_hits(
+    db_path: Path,
+    query: str,
+    root: Path,
+    *,
+    top_k: int = 5,
+    file_pattern: str | None = None,
+) -> list[dict]:
+    """Run a semantic search and return ranked hits as dicts.
+
+    Each hit: {path, start_line, end_line, content, distance, score, kind, label}.
+    Same shape as `chat.retrieve()` so HTTP API and chat retrieval stay aligned.
+    Returns [] if the project has no index. Raises nothing for missing-index;
+    a missing collection just yields an empty list.
+    """
+    if not db_path.exists():
+        return []
+    client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
+    name = collection_name_for(root)
+    try:
+        collection = client.get_collection(name)
+    except Exception:
+        return []
+
+    embedding = ollama.embed(
+        model=EMBEDDING_MODEL,
+        input=query,
+        options={"num_ctx": EMBED_NUM_CTX},
+    )["embeddings"][0]
+
+    fetch_n = top_k * 20 if file_pattern else top_k
+    result = collection.query(query_embeddings=[embedding], n_results=fetch_n)
+
+    docs = result["documents"][0]
+    metas = result["metadatas"][0]
+    distances = (result.get("distances") or [[]])[0]
+
+    hits: list[dict] = []
+    for i, (doc, meta) in enumerate(zip(docs, metas)):
+        if file_pattern and not fnmatch.fnmatch(meta.get("path", ""), file_pattern):
+            continue
+        dist = distances[i] if i < len(distances) else None
+        score = (1.0 - dist) if isinstance(dist, (int, float)) else None
+        hits.append({
+            "path": meta.get("path", ""),
+            "start_line": meta.get("start_line", 0),
+            "end_line": meta.get("end_line", 0),
+            "content": doc,
+            "distance": dist,
+            "score": score,
+            "kind": meta.get("kind") or "project",
+            "label": meta.get("label") or "",
+        })
+        if len(hits) >= top_k:
+            break
+    return hits
+
+
 def search(
     db_path: Path,
     query: str,
@@ -403,48 +461,27 @@ def search(
     if not db_path.exists():
         print(f"No index found at {db_path}.")
         return
+    # Reuse the same logic the HTTP API uses; only difference is presentation.
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     name = collection_name_for(root)
     try:
-        collection = client.get_collection(name)
+        client.get_collection(name)
     except Exception:
         print(f"No index for {root.resolve()}. Run `codebase-rag index .` first.")
         return
 
-    embedding = ollama.embed(
-        model=EMBEDDING_MODEL,
-        input=query,
-        options={"num_ctx": EMBED_NUM_CTX},
-    )["embeddings"][0]
-
-    # When filtering by file, fetch more candidates so we still get top_k after filtering.
-    fetch_n = top_k * 20 if file_pattern else top_k
-    result = collection.query(query_embeddings=[embedding], n_results=fetch_n)
-
-    docs = result["documents"][0]
-    metas = result["metadatas"][0]
-    distances = (result.get("distances") or [[]])[0]
-
-    hits: list[tuple[float | None, dict, str]] = []
-    for i, (doc, meta) in enumerate(zip(docs, metas)):
-        if file_pattern and not fnmatch.fnmatch(meta.get("path", ""), file_pattern):
-            continue
-        dist = distances[i] if i < len(distances) else None
-        hits.append((dist, meta, doc))
-        if len(hits) >= top_k:
-            break
-
+    hits = _search_hits(db_path, query, root, top_k=top_k, file_pattern=file_pattern)
     if not hits:
         print("(no results)")
         return
 
-    for i, (dist, meta, doc) in enumerate(hits):
-        header = f"[{i + 1}] {meta['path']}:{meta['start_line']}-{meta['end_line']}"
-        if dist is not None:
-            header += f"  (distance {dist:.3f})"
+    for i, hit in enumerate(hits):
+        header = f"[{i + 1}] {hit['path']}:{hit['start_line']}-{hit['end_line']}"
+        if hit["distance"] is not None:
+            header += f"  (distance {hit['distance']:.3f})"
         print(header)
         if not headers_only:
-            for line in doc.splitlines():
+            for line in hit["content"].splitlines():
                 print(f"    {line}")
             print()
 
@@ -557,10 +594,18 @@ def _ingest(
     kind: str,
     label: str,
     extra_excludes: Sequence[str] = (),
+    on_progress: Callable[[dict], None] | None = None,
 ) -> None:
     source = source.resolve()
     project_root = project_root.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _emit(phase: str, **rest: Any) -> None:
+        if on_progress is not None:
+            try:
+                on_progress({"phase": phase, **rest})
+            except Exception:
+                pass
 
     client = chromadb.PersistentClient(path=str(db_path), settings=CHROMA_SETTINGS)
     collection = _open_collection(client, project_root)
@@ -570,6 +615,8 @@ def _ingest(
         print(f"  (collection: {collection.name})")
     else:
         print(f"Project: {project_root}  (collection: {collection.name})")
+    _emit("start", source=str(source), project=str(project_root),
+          collection=collection.name, kind=kind, label=label)
 
     indexed_mtimes = _load_indexed_mtimes(collection, kind=kind, label=label)
     user_excludes = tuple(extra_excludes) + tuple(_load_ignore_file(source))
@@ -598,9 +645,13 @@ def _ingest(
             chunk["mtime"] = current_mtime
             chunks.append(chunk)
 
+    _emit("discover", total_chunks=len(chunks), files_to_clear=len(files_to_clear),
+          unchanged=skipped, nested_repos=len(nested_repos))
+
     if not chunks:
         kind_label = f"reference '{label}'" if kind == "reference" else "indexable files"
         print(f"All {skipped} {kind_label} unchanged; index is up to date.")
+        _emit("done", total_chunks=0, unchanged=skipped)
         return
 
     for rel in files_to_clear:
@@ -641,8 +692,11 @@ def _ingest(
         )
         done = min(i + EMBED_BATCH, len(chunks))
         print(f"  {done}/{len(chunks)}")
+        _emit("embed", done=done, total=len(chunks),
+              current_file=batch[-1]["path"])
 
     print("Done.")
+    _emit("done", total_chunks=len(chunks), unchanged=skipped)
 
 
 def build_index(
@@ -650,6 +704,7 @@ def build_index(
     db_path: Path,
     *,
     extra_excludes: Sequence[str] = (),
+    on_progress: Callable[[dict], None] | None = None,
 ) -> None:
     _ingest(
         source=root,
@@ -658,6 +713,7 @@ def build_index(
         kind="project",
         label="",
         extra_excludes=extra_excludes,
+        on_progress=on_progress,
     )
 
 
@@ -668,6 +724,7 @@ def add_reference(
     *,
     label: str,
     extra_excludes: Sequence[str] = (),
+    on_progress: Callable[[dict], None] | None = None,
 ) -> None:
     """Index `source` as reference material attached to `project_root`'s collection."""
     _ingest(
@@ -677,4 +734,5 @@ def add_reference(
         kind="reference",
         label=label,
         extra_excludes=extra_excludes,
+        on_progress=on_progress,
     )

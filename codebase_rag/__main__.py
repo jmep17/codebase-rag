@@ -284,12 +284,13 @@ def main() -> None:
     )
     p_chat.add_argument(
         "--confirm-writes",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help=(
-            "Prompt before every model-driven write_file or edit_file. Shows a "
-            "preview (truncated diff for edits, first 15 lines for writes); 'd' or "
-            "'f' reveal the full version. Useful for first-time chats against "
-            "unfamiliar code, or as a guardrail against prompt injection."
+            "Prompt before every model-driven write_file or edit_file (default: on). "
+            "Shows a preview (truncated diff for edits, first 15 lines for writes); "
+            "'d' or 'f' reveal the full version. Use --no-confirm-writes to restore "
+            "the old auto-apply behavior."
         ),
     )
     p_chat.add_argument(
@@ -340,6 +341,109 @@ def main() -> None:
             "'anthropic' calls api.anthropic.com — requires `pip install -e .[cloud]` "
             "and ANTHROPIC_API_KEY env var. Embeddings stay on Ollama regardless."
         ),
+    )
+    p_chat.add_argument(
+        "--tui",
+        action="store_true",
+        help=(
+            "Launch the Textual TUI instead of the line-oriented chat. "
+            "Requires `pip install -e .[tui]`. All other chat flags apply; "
+            "retrieval, streaming, tool calls, and write/shell confirmation "
+            "modals all render in the TUI."
+        ),
+    )
+
+    p_serve = subparsers.add_parser(
+        "serve",
+        help="Start the local HTTP/WebSocket backend for the browser/desktop app.",
+    )
+    p_serve.add_argument(
+        "--host",
+        type=str,
+        default=os.environ.get("CODEBASE_RAG_SERVE_HOST", "127.0.0.1"),
+        help=(
+            "Bind address (default: 127.0.0.1; env: CODEBASE_RAG_SERVE_HOST). "
+            "Anything other than loopback prints a loud warning at startup."
+        ),
+    )
+    p_serve.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("CODEBASE_RAG_SERVE_PORT", "8723")),
+        help="Bind port (default: 8723; env: CODEBASE_RAG_SERVE_PORT).",
+    )
+    p_serve.add_argument(
+        "--db", type=Path, default=DEFAULT_DB,
+        help=f"Database path (default: {DEFAULT_DB}).",
+    )
+    p_serve.add_argument(
+        "--root", type=Path, default=Path.cwd(),
+        help=(
+            "Default project root for chat sessions when the WS client "
+            "doesn't pick one (default: current working directory)."
+        ),
+    )
+    p_serve.add_argument(
+        "--static", type=Path, default=None, metavar="DIR",
+        help=(
+            "Serve a built SPA bundle at /. Typically web/dist after `pnpm build`. "
+            "Static assets are anonymously readable; the SPA must include "
+            "?token=… when calling /api/*."
+        ),
+    )
+    p_serve.add_argument(
+        "--reuse-token", action="store_true",
+        help=(
+            "Keep the existing serve.token instead of rotating on every start. "
+            "Useful for desktop wrappers that respawn the sidecar."
+        ),
+    )
+    p_serve.add_argument(
+        "--token-file", type=Path, default=None, metavar="PATH",
+        help="Override token file location (default: <meta-dir>/serve.token).",
+    )
+    p_serve.add_argument(
+        "--quiet", action="store_true",
+        help="Suppress uvicorn access logs.",
+    )
+    p_serve.add_argument(
+        "--model", type=str, default=None,
+        help="Chat model for WS sessions (default: env CODEBASE_RAG_CHAT_MODEL or mistral-nemo).",
+    )
+    p_serve.add_argument(
+        "--provider", type=str, default="ollama",
+        choices=["ollama", "anthropic"],
+        help="Chat provider for WS sessions (default: ollama).",
+    )
+    p_serve.add_argument(
+        "--architect-model", type=str, default=None, metavar="MODEL",
+        help="Optional architect model (split architect/coder flow).",
+    )
+    p_serve.add_argument("--read-only", action="store_true")
+    p_serve.add_argument("--allow-shell", action="store_true")
+    p_serve.add_argument(
+        "--shell-runner", type=str, default="host", metavar="host|docker:IMAGE",
+    )
+    p_serve.add_argument(
+        "--shell-network", type=str, default="none",
+        choices=["none", "bridge", "host"],
+    )
+    p_serve.add_argument("--shell-timeout", type=float, default=30.0)
+    p_serve.add_argument(
+        "--confirm-writes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Prompt before every model-driven write_file or edit_file in WS sessions "
+            "(default: on). Use --no-confirm-writes to auto-apply writes/edits."
+        ),
+    )
+    p_serve.add_argument("--allow-web", action="store_true")
+    p_serve.add_argument(
+        "--web-allow", action="append", default=[], metavar="HOST_GLOB",
+    )
+    p_serve.add_argument(
+        "--web-block", action="append", default=[], metavar="HOST_GLOB",
     )
 
     args = parser.parse_args()
@@ -399,14 +503,14 @@ def main() -> None:
     elif args.command == "audit":
         _handle_audit(args)
     elif args.command == "chat":
+        if not args.root.exists():
+            print(f"Root does not exist: {args.root}", file=sys.stderr)
+            sys.exit(1)
         if not args.db.exists():
             print(
                 f"No index found at {args.db}. Run `codebase-rag index <path>` first.",
                 file=sys.stderr,
             )
-            sys.exit(1)
-        if not args.root.exists():
-            print(f"Root does not exist: {args.root}", file=sys.stderr)
             sys.exit(1)
         searxng_url = os.environ.get("SEARXNG_URL", "")
         if args.allow_web and not searxng_url:
@@ -427,6 +531,37 @@ def main() -> None:
                     file=sys.stderr,
                 )
                 sys.exit(1)
+        if args.tui:
+            try:
+                from . import tui as tui_mod
+            except ImportError:
+                print(
+                    "error: --tui requires `pip install -e .[tui]` (Textual).",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            tui_mod.run_tui(
+                db_path=args.db,
+                root=args.root.resolve(),
+                model=args.model,
+                provider_name=args.provider,
+                api_key=api_key,
+                show_context=args.show_context,
+                verbose=args.verbose,
+                resume=args.resume,
+                read_only=args.read_only,
+                allow_shell=args.allow_shell,
+                shell_timeout=args.shell_timeout,
+                shell_runner=args.shell_runner,
+                shell_network=args.shell_network,
+                confirm_writes=args.confirm_writes,
+                allow_web=args.allow_web,
+                web_allow=tuple(args.web_allow),
+                web_block=tuple(args.web_block),
+                searxng_url=searxng_url,
+                architect_model=args.architect_model,
+            )
+            return
         chat_mod.agent_loop(
             args.db,
             root=args.root.resolve(),
@@ -447,6 +582,84 @@ def main() -> None:
             architect_model=args.architect_model,
             provider_name=args.provider,
             api_key=api_key,
+        )
+    elif args.command == "serve":
+        try:
+            from . import serve as serve_mod
+        except ImportError as e:
+            print(
+                "error: `serve` requires `pip install -e .[serve]` "
+                "(starlette, uvicorn, websockets).\n"
+                f"  underlying: {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not args.root.exists():
+            print(f"Root does not exist: {args.root}", file=sys.stderr)
+            sys.exit(1)
+        if not args.db.exists():
+            print(
+                f"No index found at {args.db}. "
+                f"Run `codebase-rag index <path>` first.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        api_key = None
+        if args.provider == "anthropic":
+            api_key = os.environ.get("ANTHROPIC_API_KEY")
+            if not api_key:
+                print(
+                    "error: --provider anthropic requires ANTHROPIC_API_KEY env var.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        searxng_url = os.environ.get("SEARXNG_URL", "")
+        if args.allow_web and not searxng_url:
+            print(
+                "error: --allow-web requires SEARXNG_URL env var.\n"
+                "  Quick start: docker run -d -p 8080:8080 --name searxng searxng/searxng\n"
+                "  Then:        export SEARXNG_URL=http://localhost:8080",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        # Try to lazy-import starlette/uvicorn now so a missing extra fails
+        # before we issue the token and print the banner.
+        try:
+            import starlette  # noqa: F401
+            import uvicorn  # noqa: F401
+        except ImportError as e:
+            print(
+                "error: `serve` requires `pip install -e .[serve]` "
+                "(starlette, uvicorn, websockets).\n"
+                f"  underlying: {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        serve_mod.run(
+            host=args.host,
+            port=args.port,
+            db_path=args.db,
+            root=args.root.resolve(),
+            static_dir=args.static.resolve() if args.static else None,
+            reuse_token=args.reuse_token,
+            token_file=args.token_file,
+            quiet=args.quiet,
+            chat_defaults=dict(
+                model=args.model,
+                provider_name=args.provider,
+                api_key=api_key,
+                read_only=args.read_only,
+                allow_shell=args.allow_shell,
+                shell_runner=args.shell_runner,
+                shell_network=args.shell_network,
+                shell_timeout=args.shell_timeout,
+                confirm_writes=args.confirm_writes,
+                allow_web=args.allow_web,
+                web_allow=tuple(args.web_allow),
+                web_block=tuple(args.web_block),
+                searxng_url=searxng_url,
+                architect_model=args.architect_model,
+            ),
         )
 
 

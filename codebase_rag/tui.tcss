@@ -1,0 +1,510 @@
+/*
+ * codebase-rag — Textual stylesheet
+ * Mirrors the phosphor-green token palette from designs/cli.html.
+ * Truecolor hex codes; Textual falls back to its 16-color palette
+ * automatically on terminals that don't advertise truecolor.
+ */
+
+$bg-0: #050807;
+$bg-1: #0c1110;
+$bg-2: #142019;
+$bg-3: #1c2a23;
+$border-c: #1f3b2e;
+$border-soft: #16261f;
+$border-hot: #2f7d4e;
+$fg-0: #d6f5e3;
+$fg-1: #98c9af;
+$fg-2: #5b8b73;
+$fg-dim: #3d5e4d;
+$accent: #4ade80;
+$accent-soft: #14361e;
+$ok: #4ade80;
+$warn: #fbbf24;
+$danger: #f87171;
+$info: #22d3ee;
+$purple: #c084fc;
+
+Screen {
+    background: $bg-0;
+    color: $fg-0;
+}
+
+/* --- Shield bar --------------------------------------------------------- */
+
+#shield {
+    height: 1;
+    background: $bg-1;
+    color: $fg-1;
+    padding: 0 1;
+}
+#shield-left  { width: 1fr; content-align: left middle; }
+#shield-right { width: auto; color: $fg-2; }
+
+/* --- Main body ---------------------------------------------------------- */
+
+#body {
+    height: 1fr;
+}
+#projects {
+    width: 28;
+    background: $bg-0;
+    border-right: tall $border-soft;
+    padding: 0 1;
+}
+#middle {
+    width: 1fr;
+}
+#context {
+    width: 32;
+    background: $bg-0;
+    border-left: tall $border-soft;
+    padding: 0 1;
+}
+.hidden { display: none; }
+
+/* --- Conversation pane -------------------------------------------------- */
+
+#conversation {
+    height: 1fr;
+    padding: 1 2;
+    background: $bg-0;
+}
+
+Turn {
+    height: auto;
+    margin-bottom: 1;
+}
+.user {
+    color: $fg-0;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+.turn-meta {
+    color: $fg-2;
+    padding: 0 0 1 0;
+}
+
+.card {
+    height: auto;
+    background: $bg-1;
+    padding: 0 1;
+    margin-bottom: 1;
+    border-left: thick $border-c;
+}
+.card.retrieval { border-left: thick $info; }
+.card.tool      { border-left: thick $purple; }
+.card.answer    { border-left: thick $accent; padding: 1; }
+
+.cardHead {
+    color: $fg-1;
+    padding: 0 0 1 0;
+}
+
+Horizontal.chunk {
+    height: 1;
+    background: $bg-0;
+}
+.chunk-path  { width: 1fr; color: $fg-1; }
+.chunk-score { width: auto; color: $accent; }
+Horizontal.chunk.ref .chunk-path { color: $fg-2; }
+Horizontal.chunk.ref .chunk-score { color: $fg-2; }
+
+.tool-head   { width: 1fr; color: $fg-1; }
+.tool-status { width: auto; }
+
+/* --- Projects pane ------------------------------------------------------ */
+
+.colHead {
+    color: $fg-2;
+    height: 1;
+    background: $bg-1;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+.proj {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    background: $bg-0;
+}
+.proj.active {
+    background: $accent-soft;
+    color: $fg-0;
+}
+.session {
+    height: 1;
+    color: $fg-1;
+    padding: 0 2;
+}
+.session.cur { color: $accent; }
+.newBtn {
+    height: 1;
+    color: $accent;
+    margin-top: 1;
+    padding: 0 1;
+}
+
+/* --- Composer + hint bar ----------------------------------------------- */
+
+#composer {
+    height: 5;
+    background: $bg-1;
+    border-top: tall $border-c;
+    padding: 0 1;
+}
+.pinned-row {
+    height: 1;
+    padding: 0;
+}
+.chip {
+    width: auto;
+    height: 1;
+    background: $bg-2;
+    color: $fg-1;
+    padding: 0 1;
+    margin: 0 1 0 0;
+}
+.composer-row {
+    height: 3;
+    padding: 0;
+}
+.gt {
+    width: 2;
+    color: $accent;
+    text-style: bold;
+    content-align: left middle;
+}
+#composer-input {
+    width: 1fr;
+    background: $bg-0;
+    color: $fg-0;
+    border: tall $border-c;
+}
+
+#hintbar {
+    height: 1;
+    background: $bg-1;
+    color: $fg-2;
+    border-top: tall $border-soft;
+    padding: 0 1;
+}
+
+/* --- Context pane ------------------------------------------------------- */
+
+.secH {
+    color: $fg-2;
+    height: 1;
+    margin-top: 1;
+    padding: 0 1;
+}
+Horizontal.pin {
+    height: 1;
+}
+.pin-path { width: 1fr; color: $fg-1; padding: 0 1; }
+.pin-size { width: auto; color: $fg-2; padding: 0 1; }
+.ref       { color: $fg-1; padding: 0 1; height: 1; }
+.notes-body { color: $fg-1; padding: 0 1; height: auto; }
+.gitline    { padding: 0 1; height: 1; }
+.gitfile    { color: $fg-2; }
+.retrieval-last { color: $fg-1; padding: 0 1; height: 1; }
+.retrieval-hint { color: $fg-2; padding: 0 1; height: 1; }
+
+/* --- Confirm modal (scenes "confirm-write" / "confirm-shell") --------- */
+
+ModalScreen {
+    align: center middle;
+}
+
+.confirm-modal {
+    width: 84;
+    max-height: 80%;
+    height: auto;
+    background: $bg-1;
+    border: thick $warn;
+    padding: 1 2;
+}
+.confirm-modal.shell {
+    border: thick $info;
+}
+
+.modal-head {
+    color: $warn;
+    height: auto;
+    padding: 0 0 1 0;
+    text-style: bold;
+}
+.modal-head.shell {
+    color: $info;
+}
+
+.modal-target {
+    color: $fg-0;
+    height: auto;
+    padding: 0 0 1 0;
+}
+
+.modal-meta {
+    color: $fg-2;
+    height: auto;
+    padding: 0 0 1 0;
+}
+
+.modal-cmd {
+    color: $fg-0;
+    background: $bg-0;
+    height: auto;
+    padding: 1 2;
+    margin: 0 0 1 0;
+}
+
+.modal-diff {
+    height: auto;
+    background: $bg-0;
+    color: $fg-1;
+    padding: 1 2;
+    margin: 0 0 1 0;
+}
+
+.modal-prompt {
+    color: $fg-1;
+    height: auto;
+    padding: 1 0 0 0;
+}
+
+/* --- Per-turn container ------------------------------------------------ */
+
+.turn {
+    height: auto;
+    margin-bottom: 1;
+}
+
+.slash-line {
+    height: auto;
+    padding: 0 1;
+    margin-bottom: 1;
+    color: $fg-1;
+}
+
+/* --- Palette modal (slash + command) ---------------------------------- */
+
+.palette-modal {
+    width: 80;
+    max-height: 80%;
+    height: auto;
+    background: transparent;
+}
+
+.palette {
+    width: 80;
+    height: auto;
+    max-height: 32;
+    background: $bg-1;
+    border: tall $border-hot;
+}
+
+.pHead {
+    height: 3;
+    background: $bg-2;
+    padding: 0 1;
+    border-bottom: solid $border-soft;
+}
+
+.pHead .gt {
+    width: 2;
+    color: $accent;
+    text-style: bold;
+    content-align: left middle;
+}
+
+.pHead .esc {
+    width: 4;
+    color: $fg-2;
+    content-align: right middle;
+}
+
+#palette-input {
+    width: 1fr;
+    background: transparent;
+    color: $fg-0;
+    border: none;
+}
+
+.pList {
+    height: auto;
+    max-height: 22;
+    background: $bg-1;
+}
+
+Horizontal.pItem {
+    height: 1;
+    padding: 0 1;
+    background: $bg-1;
+}
+
+Horizontal.pItem.sel {
+    background: $bg-2;
+    border-left: thick $accent;
+}
+
+.pName {
+    width: 16;
+    color: $fg-0;
+    text-style: bold;
+}
+
+.pDesc {
+    width: 1fr;
+    color: $fg-2;
+}
+
+.pReq {
+    width: auto;
+    color: $warn;
+}
+
+.pFoot {
+    height: 1;
+    background: $bg-1;
+    color: $fg-2;
+    padding: 0 1;
+    border-top: solid $border-soft;
+}
+
+/* --- Retrieval inspector modal ---------------------------------------- */
+
+.inspector-modal {
+    width: 110;
+    max-height: 92%;
+    height: auto;
+    background: $bg-1;
+    border: tall $info;
+    padding: 1 2;
+}
+
+.inspector-head {
+    height: 1;
+    color: $info;
+    padding: 0 0 1 0;
+}
+
+.inspector-meta {
+    height: auto;
+    color: $fg-1;
+    padding: 0 0 1 0;
+}
+
+.inspector-secH {
+    height: 1;
+    color: $fg-2;
+    background: $bg-2;
+    padding: 0 1;
+    margin: 1 0 0 0;
+}
+
+.inspector-list {
+    height: auto;
+    max-height: 12;
+    background: $bg-0;
+    padding: 1;
+}
+
+.inspector-row {
+    height: 1;
+    color: $fg-1;
+}
+
+.inspector-file {
+    height: auto;
+    max-height: 22;
+    background: $bg-0;
+    padding: 1 2;
+}
+
+#inspector-file-body {
+    height: auto;
+    color: $fg-1;
+}
+
+.inspector-foot {
+    height: 1;
+    color: $fg-2;
+    padding: 1 0 0 0;
+}
+
+.inspector-empty {
+    height: auto;
+    color: $fg-2;
+    padding: 1;
+}
+
+/* --- Audit overlay modal --------------------------------------------- */
+
+.audit-modal {
+    width: 130;
+    max-height: 90%;
+    height: auto;
+    background: $bg-1;
+    border: tall $border-hot;
+    padding: 0;
+}
+
+.audit-bar {
+    height: 3;
+    background: $bg-1;
+    padding: 0 2;
+    border-bottom: solid $border-soft;
+}
+
+.audit-bar-label {
+    width: auto;
+    color: $fg-2;
+    content-align: left middle;
+    margin: 0 1 0 0;
+}
+
+.audit-chip {
+    width: auto;
+    height: 1;
+    background: $bg-2;
+    color: $fg-1;
+    padding: 0 1;
+    margin: 1 1 0 0;
+}
+
+.audit-chip.on {
+    background: $accent-soft;
+    color: $accent;
+}
+
+.audit-meta {
+    width: 1fr;
+    color: $fg-2;
+    content-align: right middle;
+}
+
+.audit-list {
+    height: auto;
+    max-height: 30;
+    background: $bg-0;
+    padding: 0 2;
+}
+
+.audit-row {
+    height: auto;
+    color: $fg-1;
+    padding: 0;
+}
+
+.audit-empty {
+    height: auto;
+    color: $fg-2;
+    padding: 1;
+}
+
+.audit-foot {
+    height: 1;
+    color: $fg-2;
+    padding: 0 2;
+    background: $bg-1;
+    border-top: solid $border-soft;
+}

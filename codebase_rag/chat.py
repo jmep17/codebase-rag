@@ -6,7 +6,9 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable, Generator
 
 import chromadb
 import ollama
@@ -231,7 +233,10 @@ def retrieve(collection, query: str, top_k: int = TOP_K) -> list[dict]:
     chunks = []
     documents = results["documents"][0]
     metadatas = results["metadatas"][0]
-    for doc, meta in zip(documents, metadatas):
+    distances_lists = results.get("distances")
+    distances = distances_lists[0] if distances_lists else [None] * len(documents)
+    for doc, meta, dist in zip(documents, metadatas, distances):
+        score = (1.0 - dist) if isinstance(dist, (int, float)) else None
         chunks.append(
             {
                 "path": meta["path"],
@@ -240,6 +245,8 @@ def retrieve(collection, query: str, top_k: int = TOP_K) -> list[dict]:
                 "content": doc,
                 "kind": meta.get("kind") or "project",
                 "label": meta.get("label") or "",
+                "distance": dist,
+                "score": score,
             }
         )
     return chunks
@@ -353,37 +360,6 @@ def _assistant_msg_from_response(msg) -> dict:
     return out
 
 
-def _stream_inference(
-    provider: providers.ChatProvider,
-    model: str,
-    messages: list,
-    tools: list,
-    options: dict,
-    *,
-    verbose: bool,
-) -> tuple[str, list, dict]:
-    """Run one streaming inference through the configured provider. Print stats line."""
-    content, tool_calls, stats = provider.stream_chat(
-        model, messages, tools, options, verbose=verbose,
-    )
-    if verbose:
-        prompt_rate = stats["prompt_tokens"] / stats["prompt_eval_duration"] if stats.get("prompt_eval_duration") else 0
-        gen_rate = stats["output_tokens"] / stats["eval_duration"] if stats.get("eval_duration") else 0
-        load_note = f", load {stats['load_duration']:.1f}s" if stats.get("load_duration", 0) > 0.05 else ""
-        print(
-            f"  [{provider.name}] [{stats['elapsed']:.1f}s · prompt {stats['prompt_tokens']} tok "
-            f"in {stats.get('prompt_eval_duration', 0):.2f}s ({prompt_rate:.0f} tok/s) · "
-            f"gen {stats['output_tokens']} tok in {stats.get('eval_duration', 0):.2f}s "
-            f"({gen_rate:.0f} tok/s){load_note}]"
-        )
-    else:
-        print(
-            f"  [{provider.name}] [{stats['elapsed']:.1f}s · {stats['prompt_tokens']} in → "
-            f"{stats['output_tokens']} out]"
-        )
-    return content, tool_calls, stats
-
-
 def _system_prompt_for(root: Path) -> str:
     """SYSTEM_PROMPT plus any project notes from the meta dir."""
     notes = read_notes(root).strip()
@@ -412,12 +388,63 @@ Be concrete: name files, name functions, name what to look for. Do not write cod
 """
 
 
-def agent_loop(
+# ---------- ChatSession + init ----------
+
+
+@dataclass
+class ChatSession:
+    """Bag of state shared by agent_turn, the line driver, and the TUI driver.
+
+    Built once by init_chat_session. Mutable lists/sets (history, pinned_paths,
+    touched_files) are shared by reference and modified in place during the
+    session lifetime. Drivers wire on_change_error to render reindex failures
+    however suits them (line: print to stdout; TUI: post to a status line).
+    """
+
+    root: Path
+    db_path: Path
+    chat_model: str
+    architect_model: str | None
+    provider: providers.ChatProvider
+    provider_name: str
+    collection: Any
+    meta_dir: Path
+    session: str
+    tool_schemas: list[dict]
+    web_config: dict | None
+    shell_timeout: float
+    shell_runner: str
+    shell_network: str
+    confirm_writes: bool
+    history: list[dict]
+    pinned_paths: list[str]
+    touched_files: set[str]
+    read_only: bool
+    allow_shell: bool
+    allow_web: bool
+    web_allow: tuple[str, ...]
+    web_block: tuple[str, ...]
+    searxng_url: str
+    resumed_marker: str
+    notes_marker: str
+    on_change_error: Callable[[str, Exception], None] | None = None
+
+    def on_change(self, rel_path: str) -> None:
+        """Fired by tools that mutate files. Reindexes the file and updates touched_files."""
+        self.touched_files.add(rel_path)
+        try:
+            reindex_file(rel_path, self.root, self.db_path)
+        except Exception as e:
+            if self.on_change_error is not None:
+                self.on_change_error(rel_path, e)
+
+
+def init_chat_session(
     db_path: Path,
     root: Path,
     *,
-    show_context: bool = False,
     model: str | None = None,
+    show_context: bool = False,
     verbose: bool = False,
     resume: bool = False,
     read_only: bool = False,
@@ -425,7 +452,7 @@ def agent_loop(
     shell_timeout: float = 30,
     shell_runner: str = "host",
     shell_network: str = "none",
-    confirm_writes: bool = False,
+    confirm_writes: bool = True,
     allow_web: bool = False,
     web_allow: tuple[str, ...] = (),
     web_block: tuple[str, ...] = (),
@@ -433,14 +460,20 @@ def agent_loop(
     architect_model: str | None = None,
     provider_name: str = "ollama",
     api_key: str | None = None,
-) -> None:
+) -> ChatSession | None:
+    """Build a ChatSession or return None after printing a one-line error.
+
+    Errors handled this way: provider SDK missing or misconfigured, no index
+    for this root. Both error messages are byte-for-byte the same as the
+    pre-refactor agent_loop printed.
+    """
     root = root.resolve()
     chat_model = _resolve_model(model)
     try:
         provider = providers.make_provider(provider_name, api_key=api_key)
     except (providers.ProviderUnavailable, ValueError) as e:
         print(f"error: {e}")
-        return
+        return None
     if provider_name == "anthropic":
         print(
             "⚠ Provider: anthropic — chat content WILL leave your machine "
@@ -448,7 +481,7 @@ def agent_loop(
             "  Embeddings remain local via Ollama. Ctrl-C now if this is the wrong choice."
         )
     meta_dir = project_meta_dir(root)
-    session = uuid.uuid4().hex[:8]
+    session_id = uuid.uuid4().hex[:8]
     tool_schemas = tool_schemas_for(
         read_only=read_only,
         allow_shell=allow_shell and not read_only,
@@ -469,10 +502,10 @@ def agent_loop(
         print(
             f"No index for {root}. Run `codebase-rag index .` in this directory first."
         )
-        return
+        return None
 
     audit.log_event(
-        meta_dir, session, "session_start",
+        meta_dir, session_id, "session_start",
         provider=provider_name,
         model=chat_model, root=str(root), collection=name,
         show_context=show_context, verbose=verbose, resume=resume,
@@ -485,15 +518,6 @@ def agent_loop(
         searxng_url=searxng_url if allow_web else "",
         architect_model=architect_model or "",
     )
-
-    touched_files: set[str] = set()
-
-    def on_change(rel_path: str) -> None:
-        touched_files.add(rel_path)
-        try:
-            reindex_file(rel_path, root, db_path)
-        except Exception as e:
-            print(f"  (reindex failed for {rel_path}: {e})")
 
     system_prompt = _system_prompt_for(root)
     history: list[dict] = [{"role": "system", "content": system_prompt}]
@@ -514,450 +538,204 @@ def agent_loop(
         else:
             resumed_marker = "\n(--resume requested but no saved conversation found)"
     notes_marker = "with notes" if read_notes(root).strip() else "no notes"
-    read_only_marker = "  [READ-ONLY: write/edit tools disabled]" if read_only else ""
-    git_marker = "  [git: review-then-commit]" if gitops.is_git_repo(root) else ""
-    shell_marker = ""
-    if allow_shell and not read_only:
-        runner_desc = "host" if shell_runner == "host" else shell_runner
-        net_desc = "" if shell_runner == "host" else f", network={shell_network}"
-        shell_marker = f"  [shell: enabled, runner={runner_desc}{net_desc}, user-confirmed]"
-    confirm_marker = "  [confirm-writes: every write/edit asks first]" if confirm_writes else ""
-    web_marker = ""
-    if allow_web:
-        allow_desc = ",".join(web_allow) if web_allow else "any host"
-        web_marker = f"  [web: search via {searxng_url or 'unset'}, fetch hosts: {allow_desc}]"
-    arch_marker = ""
-    if architect_model:
-        arch_marker = f"  [architect: {architect_model} -> coder: {chat_model}]"
-    provider_marker = f"  [provider: {provider_name}]" if provider_name != "ollama" else ""
-    print(
-        f"Chatting with {chat_model}.{provider_marker}{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}\n"
-        f"Project: {root}  (collection: {name}, {notes_marker})"
-        f"{resumed_marker}\n"
-        f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
+
+    return ChatSession(
+        root=root,
+        db_path=db_path,
+        chat_model=chat_model,
+        architect_model=architect_model,
+        provider=provider,
+        provider_name=provider_name,
+        collection=collection,
+        meta_dir=meta_dir,
+        session=session_id,
+        tool_schemas=tool_schemas,
+        web_config=web_config,
+        shell_timeout=shell_timeout,
+        shell_runner=shell_runner,
+        shell_network=shell_network,
+        confirm_writes=confirm_writes,
+        history=history,
+        pinned_paths=pinned_paths,
+        touched_files=set(),
+        read_only=read_only,
+        allow_shell=allow_shell,
+        allow_web=allow_web,
+        web_allow=tuple(web_allow),
+        web_block=tuple(web_block),
+        searxng_url=searxng_url,
+        resumed_marker=resumed_marker,
+        notes_marker=notes_marker,
     )
 
-    while True:
+
+# ---------- agent_turn: pure generator producing events ----------
+
+
+def agent_turn(
+    session: ChatSession,
+    user_input: str,
+    *,
+    verbose: bool = False,
+) -> Generator[tuple, dict | None, None]:
+    """Drive one user-to-assistant turn. Yields events for the consumer to
+    render. When yielding ("confirm", tname, args) the consumer MUST .send()
+    either a resolved args dict (approved, possibly edited) or None (declined).
+
+    Events:
+      ("retrieved", chunks, pinned_files, retrieve_elapsed)
+      ("architect_start", architect_model)
+      ("architect_error", err_text)
+      ("token", piece)                          -- both architect and coder
+      ("inference_done", content, tool_calls, stats)
+      ("error", "context_length"|"provider", message)
+      ("empty_response",)
+      ("tool_call_request", tname, args)
+      ("confirm", tname, args)                  -- expects .send(resolved | None)
+      ("tool_declined", tname, args, declined_dict, raw_result_json)
+      ("tool_result", tname, args, raw_result_json, summary, elapsed)
+      ("max_turns", MAX_TURNS)
+      ("turn_done", stats_dict)
+
+    Mutates session.history in place. Audit logging fires from here so both
+    consumers see identical events. Saving the conversation is the consumer's
+    responsibility (it's a stdout/notification concern, not part of the turn).
+    """
+    s = session
+    history = s.history
+
+    retrieve_t0 = time.time()
+    chunks = retrieve(s.collection, user_input)
+    pinned_files = _load_pinned_files(s.pinned_paths, s.root)
+    retrieve_elapsed = time.time() - retrieve_t0
+    context = format_context(chunks, pinned=pinned_files)
+
+    yield ("retrieved", chunks, pinned_files, retrieve_elapsed)
+
+    augmented = (
+        f"Context from codebase:\n\n{context}\n\n---\n\nQuestion: {user_input}"
+    )
+    history.append({"role": "user", "content": augmented})
+
+    user_turn_start = time.time()
+    total_prompt_tokens = 0
+    total_output_tokens = 0
+    inferences = 0
+
+    if s.architect_model:
+        yield ("architect_start", s.architect_model)
+        architect_history = list(history)
+        architect_history[0] = {
+            "role": "system",
+            "content": history[0]["content"] + ARCHITECT_SYSTEM_ADDENDUM,
+        }
+        arch_content = ""
+        arch_tool_calls: list = []
+        arch_stats: dict = {
+            "prompt_tokens": 0, "output_tokens": 0, "elapsed": 0.0,
+            "prompt_eval_duration": 0.0, "eval_duration": 0.0, "load_duration": 0.0,
+        }
         try:
-            user_input = input("\n> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            audit.log_event(meta_dir, session, "session_end", reason="eof")
-            return
-        if not user_input:
-            continue
-        if user_input in (":q", "exit", "quit"):
-            audit.log_event(meta_dir, session, "session_end", reason="user_quit")
-            return
-        if user_input == ":reset":
-            history = [{"role": "system", "content": _system_prompt_for(root)}]
-            _save_conversation(root, history, chat_model, pinned=pinned_paths)
-            audit.log_event(meta_dir, session, "slash_command", command="reset")
-            print("(history cleared; pinned files kept)")
-            continue
-        if user_input == ":forget":
-            history = [{"role": "system", "content": _system_prompt_for(root)}]
-            pinned_paths = []
-            _clear_conversation(root)
-            audit.log_event(meta_dir, session, "slash_command", command="forget")
-            print("(history cleared, pinned files cleared, saved conversation deleted)")
-            continue
-        if user_input.startswith(":add"):
-            arg = user_input[len(":add"):].strip()
-            if not arg:
-                print(":add usage: :add <path-or-glob>   (e.g. :add src/auth.py  or  :add 'src/**/*.py')")
-                continue
-            matches = _expand_pin_arg(arg, root)
-            if not matches:
-                print(f"(:add: no files found matching {arg!r} under {root})")
-                continue
-            added = []
-            skipped: list[tuple[str, str]] = []
-            for rel in matches:
-                if rel in pinned_paths:
-                    skipped.append((rel, "already pinned"))
-                    continue
-                full = root / rel
-                try:
-                    size = full.stat().st_size
-                except OSError as e:
-                    skipped.append((rel, f"{type(e).__name__}"))
-                    continue
-                if size > MAX_READ_BYTES:
-                    skipped.append((rel, f"too large ({size} bytes > {MAX_READ_BYTES})"))
-                    continue
-                pinned_paths.append(rel)
-                added.append((rel, size))
-            for rel, size in added:
-                print(f"  + pinned {rel} ({size} bytes)")
-            for rel, reason in skipped:
-                print(f"  · skipped {rel} ({reason})")
-            audit.log_event(
-                meta_dir, session, "slash_command",
-                command="add", arg=arg, added=[r for r, _ in added],
-            )
-            _save_conversation(root, history, chat_model, pinned=pinned_paths)
-            continue
-        if user_input.startswith(":drop"):
-            arg = user_input[len(":drop"):].strip()
-            if not arg:
-                print(":drop usage: :drop <path-or-glob>")
-                continue
-            if arg == "all":
-                count = len(pinned_paths)
-                pinned_paths.clear()
-                print(f"(:drop all: removed {count} pinned files)")
-                audit.log_event(meta_dir, session, "slash_command", command="dropall")
-                _save_conversation(root, history, chat_model, pinned=pinned_paths)
-                continue
-            # Match either an exact rel path or a glob over the current pin list
-            removed: list[str] = []
-            for rel in list(pinned_paths):
-                if rel == arg or Path(rel).match(arg):
-                    pinned_paths.remove(rel)
-                    removed.append(rel)
-            if not removed:
-                print(f"(:drop: no pinned files match {arg!r})")
-            else:
-                for rel in removed:
-                    print(f"  - unpinned {rel}")
-            audit.log_event(
-                meta_dir, session, "slash_command",
-                command="drop", arg=arg, removed=removed,
-            )
-            _save_conversation(root, history, chat_model, pinned=pinned_paths)
-            continue
-        if user_input == ":dropall":
-            count = len(pinned_paths)
-            pinned_paths.clear()
-            print(f"(:dropall: removed {count} pinned files)")
-            audit.log_event(meta_dir, session, "slash_command", command="dropall")
-            _save_conversation(root, history, chat_model, pinned=pinned_paths)
-            continue
-        if user_input.startswith(":search"):
-            query = user_input[len(":search"):].strip()
-            if not allow_web:
-                print(":search requires --allow-web at session start")
-                audit.log_event(meta_dir, session, "slash_command", command="search", error="not allowed")
-                continue
-            if not query:
-                print(":search usage: :search <query>")
-                continue
-            from . import web as web_mod
-            audit.log_event(meta_dir, session, "slash_command", command="search", arg=query)
-            r = web_mod.web_search(query, searxng_url=searxng_url, top_k=10)
-            audit.log_event(meta_dir, session, "tool_result", tool="web_search",
-                            result={k: v for k, v in r.items() if k != "results"})
-            if not r.get("ok"):
-                print(f"  search error: {r.get('error')}")
-            else:
-                for i, hit in enumerate(r.get("results", []), 1):
-                    print(f"  [{i}] {hit.get('title') or '(no title)'}")
-                    print(f"       {hit.get('url')}")
-            history.append({
-                "role": "user",
-                "content": f"I ran web_search({query!r}) and got:\n```\n{json.dumps(r, indent=2)}\n```",
-            })
-            continue
-        if user_input.startswith(":fetch"):
-            url = user_input[len(":fetch"):].strip()
-            if not allow_web:
-                print(":fetch requires --allow-web at session start")
-                audit.log_event(meta_dir, session, "slash_command", command="fetch", error="not allowed")
-                continue
-            if not url:
-                print(":fetch usage: :fetch <url>")
-                continue
-            from . import web as web_mod
-            audit.log_event(meta_dir, session, "slash_command", command="fetch", arg=url)
-            r = web_mod.web_fetch(
-                url,
-                allow_patterns=tuple(web_allow),
-                block_patterns=tuple(web_block),
-                cache_dir=web_cache_dir,
-            )
-            audit.log_event(meta_dir, session, "tool_result", tool="web_fetch",
-                            result={k: v for k, v in r.items() if k != "content"})
-            if not r.get("ok"):
-                print(f"  fetch error: {r.get('error')}")
-            else:
-                marker = " (cached)" if r.get("cached") else ""
-                print(f"  [{r.get('status', '?')} · {r.get('url')}{marker}]")
-                if r.get("title"):
-                    print(f"  Title: {r['title']}")
-            history.append({
-                "role": "user",
-                "content": f"I ran web_fetch({url!r}) and got:\n```\n{json.dumps(r, indent=2)[:4000]}\n```",
-            })
-            continue
-        if user_input.startswith(":run"):
-            cmd = user_input[len(":run"):].strip()
-            if not allow_shell:
-                print(":run requires --allow-shell at session start")
-                audit.log_event(meta_dir, session, "slash_command", command="run", error="not allowed")
-                continue
-            if not cmd:
-                print(":run usage: :run <command>")
-                continue
-            audit.log_event(meta_dir, session, "slash_command", command="run", arg=cmd, runner=shell_runner)
-            result_dict = run_shell(
-                root, cmd, timeout=shell_timeout, runner=shell_runner, shell_network=shell_network,
-            )
-            audit.log_event(
-                meta_dir, session, "tool_result",
-                tool="run_shell", duration_s=result_dict.get("duration_s"),
-                result={k: v for k, v in result_dict.items() if k != "output"},
-            )
-            print(f"  [exit {result_dict.get('exit_code', '?')} · {result_dict.get('duration_s', 0)}s]")
-            out = result_dict.get("output") or ""
-            if out:
-                # Strip the untrusted-wrapper markers before printing to terminal — they're
-                # only meaningful when the text re-enters the model's context.
-                cleaned = out
-                if cleaned.startswith(UNTRUSTED_BEGIN):
-                    cleaned = cleaned[len(UNTRUSTED_BEGIN):].lstrip("\n")
-                if cleaned.endswith(UNTRUSTED_END):
-                    cleaned = cleaned[: -len(UNTRUSTED_END)].rstrip("\n")
-                print(cleaned)
-            # Feed result back into history so the next turn can reason about it.
-            history.append({
-                "role": "user",
+            for ev in s.provider.iter_chat_events(
+                s.architect_model, architect_history, [], CHAT_OPTIONS,
+            ):
+                if ev[0] == "token":
+                    yield ("token", ev[1])
+                    arch_content += ev[1]
+                elif ev[0] == "done":
+                    _, arch_content, arch_tool_calls, arch_stats = ev
+            yield ("inference_done", arch_content, arch_tool_calls, arch_stats)
+        except Exception as e:
+            yield ("architect_error", str(e))
+        inferences += 1
+        total_prompt_tokens += arch_stats.get("prompt_tokens", 0)
+        total_output_tokens += arch_stats.get("output_tokens", 0)
+        if arch_content and arch_content.strip():
+            last = history[-1]
+            history[-1] = {
+                "role": last.get("role", "user"),
                 "content": (
-                    f"I ran `{cmd}` and got:\n"
-                    f"```\n{json.dumps(result_dict, indent=2)}\n```"
+                    (last.get("content") or "")
+                    + "\n\n---\n\n## Architect plan\n\n"
+                    + arch_content.strip()
                 ),
-            })
-            continue
-        if user_input == ":gitstatus":
-            if not gitops.is_git_repo(root):
-                print(":gitstatus requires a git repo at the project root")
-            else:
-                out = gitops.status_short(root)
-                print(out if out.strip() else "(working tree clean)")
-            audit.log_event(meta_dir, session, "slash_command", command="gitstatus")
-            continue
-        if user_input.startswith(":diff"):
-            arg = user_input[len(":diff"):].strip() or None
-            if not gitops.is_git_repo(root):
-                print(":diff requires a git repo at the project root")
-            else:
-                d = gitops.pending_diff(root, arg)
-                print(d if d.strip() else "(no pending changes)")
-            audit.log_event(meta_dir, session, "slash_command", command="diff", arg=arg or "")
-            continue
-        if user_input.startswith(":commit"):
-            arg = user_input[len(":commit"):].strip()
-            if not gitops.is_git_repo(root):
-                print(":commit requires a git repo at the project root")
-                audit.log_event(meta_dir, session, "slash_command", command="commit", error="not a git repo")
-                continue
-            if not gitops.has_pending_changes(root):
-                print("(nothing to commit; working tree is clean)")
-                audit.log_event(meta_dir, session, "slash_command", command="commit", error="clean tree")
-                continue
-            if not touched_files:
-                print(
-                    "(no model edits this session; refusing to commit user changes — "
-                    "use plain `git commit` for those)"
-                )
-                audit.log_event(meta_dir, session, "slash_command", command="commit", error="no touched files")
-                continue
-            paths_to_stage = sorted(touched_files)
-            stat = gitops.diff_stat(root, paths_to_stage)
-            if stat.strip():
-                print(stat.rstrip("\n"))
-            else:
-                print("(touched files appear unchanged on disk — model edits may have been reverted)")
-            message = arg or _last_assistant_summary(history)
-            try:
-                ans = input(f"Commit as '{gitops.COMMIT_TAG} {message}'? [Y/n] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                ans = "n"
-                print()
-            if ans and ans not in ("y", "yes"):
-                print("(aborted)")
-                audit.log_event(meta_dir, session, "slash_command", command="commit", aborted=True)
-                continue
-            result = gitops.commit_pending(root, message, paths=paths_to_stage)
-            if result["ok"]:
-                print(f"  Committed {result['short']} ({len(result['files'])} file(s))")
-                touched_files.clear()
-            else:
-                print(f"  Commit failed: {result['error']}")
-            audit.log_event(meta_dir, session, "slash_command", command="commit", result=result)
-            continue
-        if user_input == ":undo":
-            if not gitops.is_git_repo(root):
-                print(":undo requires a git repo at the project root")
-                continue
-            last = gitops.last_codebase_rag_commit(root)
-            if last is None:
-                print("(no [codebase-rag] commits found in history)")
-                audit.log_event(meta_dir, session, "slash_command", command="undo", error="none found")
-                continue
-            print(f"Last codebase-rag commit: {last['short']} — {last['subject']}")
-            print(f"Files: {', '.join(last['files']) if last['files'] else '(none)'}")
-            try:
-                ans = input("Revert this commit? [y/N] ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                ans = "n"
-                print()
-            if ans not in ("y", "yes"):
-                print("(aborted)")
-                audit.log_event(meta_dir, session, "slash_command", command="undo", aborted=True)
-                continue
-            result = gitops.undo_last(root)
-            if result["ok"]:
-                print(f"  Reverted {result['reverted_sha']} via {result['revert_sha']}")
-            else:
-                print(f"  Undo failed: {result['error']}")
-            audit.log_event(meta_dir, session, "slash_command", command="undo", result=result)
-            continue
-        if user_input == ":pinned":
-            if not pinned_paths:
-                print("(no pinned files; use :add <path> to add some)")
-            else:
-                pinned_now = _load_pinned_files(pinned_paths, root)
-                total = sum(p["size"] for p in pinned_now)
-                print(f"{len(pinned_now)} pinned file(s), {total} bytes total:")
-                pinned_by_path = {p["path"]: p["size"] for p in pinned_now}
-                for rel in pinned_paths:
-                    if rel in pinned_by_path:
-                        print(f"  - {rel} ({pinned_by_path[rel]} bytes)")
-                    else:
-                        print(f"  - {rel} (missing or unreadable)")
-            audit.log_event(meta_dir, session, "slash_command", command="pinned")
-            continue
-
-        retrieve_t0 = time.time()
-        chunks = retrieve(collection, user_input)
-        pinned_files = _load_pinned_files(pinned_paths, root)
-        retrieve_elapsed = time.time() - retrieve_t0
-        context = format_context(chunks, pinned=pinned_files)
-
-        if verbose:
-            project_count = sum(1 for c in chunks if (c.get("kind") or "project") == "project")
-            ref_count = len(chunks) - project_count
-            pin_note = f", {len(pinned_files)} pinned" if pinned_files else ""
-            print(
-                f"[retrieve: {len(chunks)} chunks ({project_count} project, "
-                f"{ref_count} reference{pin_note}) in {retrieve_elapsed:.2f}s]"
-            )
-        else:
-            pin_note = f" + {len(pinned_files)} pinned" if pinned_files else ""
-            print(f"[retrieve: {len(chunks)} chunks{pin_note} · {retrieve_elapsed:.2f}s]")
-
-        if show_context:
-            print("--- retrieved ---")
-            for c in chunks:
-                label = f"  [{c.get('label')}] " if c.get("kind") == "reference" else "  "
-                print(f"{label}{c['path']}:{c['start_line']}-{c['end_line']}")
-            print("-----------------")
-
-        augmented = (
-            f"Context from codebase:\n\n{context}\n\n---\n\nQuestion: {user_input}"
-        )
-        history.append({"role": "user", "content": augmented})
-
-        user_turn_start = time.time()
-        total_prompt_tokens = 0
-        total_output_tokens = 0
-        inferences = 0
-
-        if architect_model:
-            # Architect runs first: same context, no tools, produces a plan.
-            print(f"  [architect ({architect_model}) thinking…]")
-            architect_history = list(history)
-            architect_history[0] = {
-                "role": "system",
-                "content": history[0]["content"] + ARCHITECT_SYSTEM_ADDENDUM,
             }
-            try:
-                arch_content, _arch_tool_calls, arch_stats = _stream_inference(
-                    provider,
-                    architect_model,
-                    architect_history,
-                    [],
-                    CHAT_OPTIONS,
-                    verbose=verbose,
-                )
-            except Exception as e:
-                print(f"  (architect error: {e}; falling back to single-model flow)")
-                arch_content = ""
-                arch_stats = {"prompt_tokens": 0, "output_tokens": 0}
-            inferences += 1
-            total_prompt_tokens += arch_stats["prompt_tokens"]
-            total_output_tokens += arch_stats["output_tokens"]
-            if arch_content and arch_content.strip():
-                last = history[-1]
-                history[-1] = {
-                    "role": last.get("role", "user"),
-                    "content": (
-                        (last.get("content") or "")
-                        + "\n\n---\n\n## Architect plan\n\n"
-                        + arch_content.strip()
-                    ),
-                }
-                audit.log_event(
-                    meta_dir, session, "architect_plan",
-                    model=architect_model,
-                    plan_len=len(arch_content.strip()),
-                )
-
-        for turn in range(MAX_TURNS):
-            inferences += 1
-            try:
-                content, tool_calls, stats = _stream_inference(
-                    provider,
-                    chat_model,
-                    history,
-                    tool_schemas,
-                    CHAT_OPTIONS,
-                    verbose=verbose,
-                )
-            except ollama.ResponseError as e:
-                msg_text = str(e).lower()
-                if "context" in msg_text and "length" in msg_text:
-                    print(
-                        "\n(prompt exceeded context window — try `:reset` to clear history, "
-                        f"lower TOP_K in chat.py, or raise num_ctx above {CHAT_OPTIONS['num_ctx']})"
-                    )
-                else:
-                    print(f"\n(ollama error: {e})")
-                history.pop()
-                break
-
-            total_prompt_tokens += stats["prompt_tokens"]
-            total_output_tokens += stats["output_tokens"]
-
-            history.append(
-                _assistant_msg_from_response(
-                    {"content": content, "tool_calls": tool_calls}
-                )
+            audit.log_event(
+                s.meta_dir, s.session, "architect_plan",
+                model=s.architect_model,
+                plan_len=len(arch_content.strip()),
             )
 
-            if not tool_calls:
-                if not content.strip():
-                    print("(no response)")
-                break
+    stop_reason = "complete"
+    completed_turns = 0
+    for turn in range(MAX_TURNS):
+        completed_turns = turn + 1
+        inferences += 1
+        content = ""
+        tool_calls: list = []
+        stats: dict = {
+            "prompt_tokens": 0, "output_tokens": 0, "elapsed": 0.0,
+            "prompt_eval_duration": 0.0, "eval_duration": 0.0, "load_duration": 0.0,
+        }
+        try:
+            for ev in s.provider.iter_chat_events(
+                s.chat_model, history, s.tool_schemas, CHAT_OPTIONS,
+            ):
+                if ev[0] == "token":
+                    yield ("token", ev[1])
+                    content += ev[1]
+                elif ev[0] == "done":
+                    _, content, tool_calls, stats = ev
+        except ollama.ResponseError as e:
+            msg_text = str(e).lower()
+            if "context" in msg_text and "length" in msg_text:
+                yield (
+                    "error", "context_length",
+                    f"prompt exceeded context window — try `:reset` to clear history, "
+                    f"lower TOP_K in chat.py, or raise num_ctx above {CHAT_OPTIONS['num_ctx']}",
+                )
+            else:
+                yield ("error", "provider", str(e))
+            history.pop()
+            stop_reason = "error"
+            break
 
-            for call in tool_calls:
-                tname = call["function"]["name"]
-                args = call["function"]["arguments"]
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {}
-                audit.log_event(meta_dir, session, "tool_call", tool=tname, args=args)
-                # Model-driven shell calls require explicit user confirmation.
-                # Model-driven writes/edits do too when --confirm-writes is set.
-                confirmation: dict | None = args
-                if tname == "run_shell":
-                    confirmation = _confirm_shell(args)
-                elif confirm_writes and tname in ("write_file", "edit_file"):
-                    confirmation = _confirm_write(tname, args)
-                if confirmation is None:
+        total_prompt_tokens += stats.get("prompt_tokens", 0)
+        total_output_tokens += stats.get("output_tokens", 0)
+        yield ("inference_done", content, tool_calls, stats)
+
+        history.append(
+            _assistant_msg_from_response(
+                {"content": content, "tool_calls": tool_calls}
+            )
+        )
+
+        if not tool_calls:
+            if not content.strip():
+                yield ("empty_response",)
+            stop_reason = "complete"
+            break
+
+        for call in tool_calls:
+            tname = call["function"]["name"]
+            raw_args = call["function"]["arguments"]
+            if isinstance(raw_args, str):
+                try:
+                    args = json.loads(raw_args)
+                except json.JSONDecodeError:
+                    args = {}
+            else:
+                args = raw_args
+            audit.log_event(s.meta_dir, s.session, "tool_call", tool=tname, args=args)
+            yield ("tool_call_request", tname, args)
+
+            needs_confirm = (
+                tname == "run_shell"
+                or (s.confirm_writes and tname in ("write_file", "edit_file"))
+            )
+            if needs_confirm:
+                resolved = yield ("confirm", tname, args)
+                if resolved is None:
                     declined = {
                         "ok": False,
                         "error": f"user declined to {tname}",
@@ -966,52 +744,633 @@ def agent_loop(
                     }
                     result = json.dumps(declined)
                     audit.log_event(
-                        meta_dir, session, "tool_result",
+                        s.meta_dir, s.session, "tool_result",
                         tool=tname, duration_s=0.0, result=declined,
                     )
-                    preview = result if verbose else result[:200]
-                    print(f"  -> {tname} (declined by user)")
-                    print(f"     {preview}")
+                    yield ("tool_declined", tname, args, declined, result)
                     history.append({"role": "tool", "content": result})
                     continue
-                args = confirmation
-                tool_t0 = time.time()
-                result = run_tool(
-                    tname, args, root, on_change,
-                    shell_timeout=shell_timeout,
-                    shell_runner=shell_runner,
-                    shell_network=shell_network,
-                    web_config=web_config,
-                )
-                tool_elapsed = time.time() - tool_t0
-                try:
-                    parsed = json.loads(result)
-                    summary = {k: v for k, v in parsed.items() if k not in {"content", "stdout", "stderr", "matches"}}
-                    if isinstance(parsed, dict) and "matches" in parsed:
-                        summary["match_count"] = parsed.get("match_count")
-                except (TypeError, json.JSONDecodeError):
-                    summary = {"raw_preview_len": len(result) if isinstance(result, str) else 0}
-                audit.log_event(
-                    meta_dir, session, "tool_result",
-                    tool=tname, duration_s=round(tool_elapsed, 3), result=summary,
-                )
-                preview = result if verbose else result[:200]
-                print(f"  -> {tname}({', '.join(args.keys())}) [{tool_elapsed:.2f}s]")
-                print(f"     {preview}")
-                history.append({"role": "tool", "content": result})
-        else:
-            print(f"(stopped after {MAX_TURNS} tool-call rounds)")
+                args = resolved
 
-        turn_elapsed = time.time() - user_turn_start
-        summary_parts = [
-            f"turn: {turn_elapsed:.1f}s",
-            f"{inferences} inference{'s' if inferences != 1 else ''}",
-            f"{total_prompt_tokens} in → {total_output_tokens} out",
-            f"history: {len(history)} messages",
-        ]
-        print(f"[{' · '.join(summary_parts)}]")
+            tool_t0 = time.time()
+            result = run_tool(
+                tname, args, s.root, s.on_change,
+                shell_timeout=s.shell_timeout,
+                shell_runner=s.shell_runner,
+                shell_network=s.shell_network,
+                web_config=s.web_config,
+            )
+            tool_elapsed = time.time() - tool_t0
+            try:
+                parsed = json.loads(result)
+                summary = {k: v for k, v in parsed.items() if k not in {"content", "stdout", "stderr", "matches"}}
+                if isinstance(parsed, dict) and "matches" in parsed:
+                    summary["match_count"] = parsed.get("match_count")
+            except (TypeError, json.JSONDecodeError):
+                summary = {"raw_preview_len": len(result) if isinstance(result, str) else 0}
+            audit.log_event(
+                s.meta_dir, s.session, "tool_result",
+                tool=tname, duration_s=round(tool_elapsed, 3), result=summary,
+            )
+            yield ("tool_result", tname, args, result, summary, tool_elapsed)
+            history.append({"role": "tool", "content": result})
+    else:
+        stop_reason = "max_turns"
+        yield ("max_turns", MAX_TURNS)
+
+    turn_elapsed = time.time() - user_turn_start
+    yield ("turn_done", {
+        "elapsed": turn_elapsed,
+        "inferences": inferences,
+        "prompt_tokens": total_prompt_tokens,
+        "output_tokens": total_output_tokens,
+        "history_len": len(history),
+        "stop_reason": stop_reason,
+        "completed_turns": completed_turns,
+    })
+
+
+# ---------- Line driver: consume agent_turn events to stdout ----------
+
+
+def _drive_line(
+    session: ChatSession,
+    turn_gen,
+    *,
+    verbose: bool,
+    show_context: bool,
+) -> None:
+    """Consume an agent_turn generator and render to stdout. Confirmations
+    delegate to _confirm_write/_confirm_shell (the same input()-based
+    functions the pre-refactor code used). Output should be byte-for-byte
+    identical to the pre-refactor line loop."""
+    provider_name = session.provider.name
+    event = next(turn_gen, None)
+    while event is not None:
+        kind = event[0]
+        if kind == "retrieved":
+            _, chunks, pinned_files, retrieve_elapsed = event
+            if verbose:
+                project_count = sum(1 for c in chunks if (c.get("kind") or "project") == "project")
+                ref_count = len(chunks) - project_count
+                pin_note = f", {len(pinned_files)} pinned" if pinned_files else ""
+                print(
+                    f"[retrieve: {len(chunks)} chunks ({project_count} project, "
+                    f"{ref_count} reference{pin_note}) in {retrieve_elapsed:.2f}s]"
+                )
+            else:
+                pin_note = f" + {len(pinned_files)} pinned" if pinned_files else ""
+                print(f"[retrieve: {len(chunks)} chunks{pin_note} · {retrieve_elapsed:.2f}s]")
+            if show_context:
+                print("--- retrieved ---")
+                for c in chunks:
+                    label = f"  [{c.get('label')}] " if c.get("kind") == "reference" else "  "
+                    print(f"{label}{c['path']}:{c['start_line']}-{c['end_line']}")
+                print("-----------------")
+        elif kind == "architect_start":
+            print(f"  [architect ({event[1]}) thinking…]")
+        elif kind == "architect_error":
+            print(f"  (architect error: {event[1]}; falling back to single-model flow)")
+        elif kind == "token":
+            print(event[1], end="", flush=True)
+        elif kind == "inference_done":
+            _, content, _tool_calls, stats = event
+            if content and not content.endswith("\n"):
+                print()
+            if verbose:
+                prompt_rate = stats["prompt_tokens"] / stats["prompt_eval_duration"] if stats.get("prompt_eval_duration") else 0
+                gen_rate = stats["output_tokens"] / stats["eval_duration"] if stats.get("eval_duration") else 0
+                load_note = f", load {stats['load_duration']:.1f}s" if stats.get("load_duration", 0) > 0.05 else ""
+                print(
+                    f"  [{provider_name}] [{stats['elapsed']:.1f}s · prompt {stats['prompt_tokens']} tok "
+                    f"in {stats.get('prompt_eval_duration', 0):.2f}s ({prompt_rate:.0f} tok/s) · "
+                    f"gen {stats['output_tokens']} tok in {stats.get('eval_duration', 0):.2f}s "
+                    f"({gen_rate:.0f} tok/s){load_note}]"
+                )
+            else:
+                print(
+                    f"  [{provider_name}] [{stats['elapsed']:.1f}s · {stats['prompt_tokens']} in → "
+                    f"{stats['output_tokens']} out]"
+                )
+        elif kind == "error":
+            _, sub, msg = event
+            if sub == "context_length":
+                print(f"\n({msg})")
+            else:
+                print(f"\n(ollama error: {msg})")
+        elif kind == "empty_response":
+            print("(no response)")
+        elif kind == "tool_call_request":
+            pass
+        elif kind == "confirm":
+            _, tname, args = event
+            if tname == "run_shell":
+                resolved = _confirm_shell(args)
+            elif tname in ("write_file", "edit_file"):
+                resolved = _confirm_write(tname, args)
+            else:
+                resolved = args
+            event = turn_gen.send(resolved)
+            continue
+        elif kind == "tool_declined":
+            _, tname, _args, _declined, raw_result = event
+            preview = raw_result if verbose else raw_result[:200]
+            print(f"  -> {tname} (declined by user)")
+            print(f"     {preview}")
+        elif kind == "tool_result":
+            _, tname, args, raw_result, _summary, tool_elapsed = event
+            preview = raw_result if verbose else raw_result[:200]
+            print(f"  -> {tname}({', '.join(args.keys())}) [{tool_elapsed:.2f}s]")
+            print(f"     {preview}")
+        elif kind == "max_turns":
+            print(f"(stopped after {event[1]} tool-call rounds)")
+        elif kind == "turn_done":
+            stats = event[1]
+            summary_parts = [
+                f"turn: {stats['elapsed']:.1f}s",
+                f"{stats['inferences']} inference{'s' if stats['inferences'] != 1 else ''}",
+                f"{stats['prompt_tokens']} in → {stats['output_tokens']} out",
+                f"history: {stats['history_len']} messages",
+            ]
+            print(f"[{' · '.join(summary_parts)}]")
+        event = next(turn_gen, None)
+
+
+def _print_banner(session: ChatSession) -> None:
+    """Print the multi-line banner the pre-refactor agent_loop printed."""
+    s = session
+    read_only_marker = "  [READ-ONLY: write/edit tools disabled]" if s.read_only else ""
+    git_marker = "  [git: review-then-commit]" if gitops.is_git_repo(s.root) else ""
+    shell_marker = ""
+    if s.allow_shell and not s.read_only:
+        runner_desc = "host" if s.shell_runner == "host" else s.shell_runner
+        net_desc = "" if s.shell_runner == "host" else f", network={s.shell_network}"
+        shell_marker = f"  [shell: enabled, runner={runner_desc}{net_desc}, user-confirmed]"
+    confirm_marker = "  [confirm-writes: every write/edit asks first]" if s.confirm_writes else ""
+    web_marker = ""
+    if s.allow_web:
+        allow_desc = ",".join(s.web_allow) if s.web_allow else "any host"
+        web_marker = f"  [web: search via {s.searxng_url or 'unset'}, fetch hosts: {allow_desc}]"
+    arch_marker = ""
+    if s.architect_model:
+        arch_marker = f"  [architect: {s.architect_model} -> coder: {s.chat_model}]"
+    provider_marker = f"  [provider: {s.provider_name}]" if s.provider_name != "ollama" else ""
+    name = collection_name_for(s.root)
+    print(
+        f"Chatting with {s.chat_model}.{provider_marker}{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}\n"
+        f"Project: {s.root}  (collection: {name}, {s.notes_marker})"
+        f"{s.resumed_marker}\n"
+        f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
+    )
+
+
+# ---------- Slash command registry + dispatcher ----------
+
+
+@dataclass(frozen=True)
+class SlashSpec:
+    """One row of the slash palette.
+
+    `requires` is a free-form tag string (e.g. "git", "--allow-web") used by
+    both the palette UI (amber chip) and the dispatcher to short-circuit
+    obvious flag-gated commands.
+    """
+    name: str
+    desc: str
+    requires: str = ""
+    takes_arg: bool = False
+
+
+SLASH_SPECS: tuple[SlashSpec, ...] = (
+    SlashSpec(":add",       "pin a file or glob to every turn — :add src/auth.py",                takes_arg=True),
+    SlashSpec(":drop",      "remove a pinned path (or :drop all)",                                takes_arg=True),
+    SlashSpec(":pinned",    "list currently pinned files"),
+    SlashSpec(":reset",     "clear conversation history (keep pinned)"),
+    SlashSpec(":forget",    "clear history, pins, and the saved conversation"),
+    SlashSpec(":search",    "web search via SearXNG",                  requires="--allow-web",     takes_arg=True),
+    SlashSpec(":fetch",     "fetch a URL into context (cached)",       requires="--allow-web",     takes_arg=True),
+    SlashSpec(":run",       "run a shell command",                     requires="--allow-shell · confirm", takes_arg=True),
+    SlashSpec(":gitstatus", "git status (short form)",                 requires="git"),
+    SlashSpec(":diff",      "pending diff for touched files",          requires="git",             takes_arg=True),
+    SlashSpec(":commit",    "commit model-touched files",              requires="git · confirm",   takes_arg=True),
+    SlashSpec(":undo",      "revert last [codebase-rag] commit",       requires="git · confirm"),
+    SlashSpec(":q",         "quit the session"),
+)
+
+
+def dispatch_slash(
+    session: ChatSession,
+    user_input: str,
+    *,
+    confirm: Callable[[str], bool] | None = None,
+) -> list[tuple[str, str]] | None:
+    """Run a slash command against `session`. Returns None when `user_input`
+    is not a slash command. Otherwise returns a list of (level, text) lines:
+
+      level ∈ {"info", "warn", "err", "ok", "exit"}
+
+    `confirm` is called for the few commands that need a yes/no prompt
+    (`:commit`, `:undo`). It receives a human prompt string and returns
+    True to proceed. When `confirm` is None the prompt is auto-approved —
+    the palette caller is responsible for getting consent earlier.
+
+    Designed so the line driver and the TUI palette share one code path,
+    keeping audit-log events byte-identical.
+    """
+    s = session
+    out: list[tuple[str, str]] = []
+
+    def yn(prompt: str) -> bool:
+        return True if confirm is None else confirm(prompt)
+
+    if user_input in (":q", "exit", "quit"):
+        audit.log_event(s.meta_dir, s.session, "session_end", reason="user_quit")
+        out.append(("exit", ""))
+        return out
+
+    if user_input == ":reset":
+        s.history.clear()
+        s.history.append({"role": "system", "content": _system_prompt_for(s.root)})
+        _save_conversation(s.root, s.history, s.chat_model, pinned=s.pinned_paths)
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="reset")
+        out.append(("info", "(history cleared; pinned files kept)"))
+        return out
+
+    if user_input == ":forget":
+        s.history.clear()
+        s.history.append({"role": "system", "content": _system_prompt_for(s.root)})
+        s.pinned_paths.clear()
+        _clear_conversation(s.root)
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="forget")
+        out.append(("info", "(history cleared, pinned files cleared, saved conversation deleted)"))
+        return out
+
+    if user_input.startswith(":add"):
+        arg = user_input[len(":add"):].strip()
+        if not arg:
+            out.append(("warn", ":add usage: :add <path-or-glob>   (e.g. :add src/auth.py  or  :add 'src/**/*.py')"))
+            return out
+        matches = _expand_pin_arg(arg, s.root)
+        if not matches:
+            out.append(("warn", f"(:add: no files found matching {arg!r} under {s.root})"))
+            return out
+        added: list[tuple[str, int]] = []
+        skipped: list[tuple[str, str]] = []
+        for rel in matches:
+            if rel in s.pinned_paths:
+                skipped.append((rel, "already pinned"))
+                continue
+            full = s.root / rel
+            try:
+                size = full.stat().st_size
+            except OSError as e:
+                skipped.append((rel, f"{type(e).__name__}"))
+                continue
+            if size > MAX_READ_BYTES:
+                skipped.append((rel, f"too large ({size} bytes > {MAX_READ_BYTES})"))
+                continue
+            s.pinned_paths.append(rel)
+            added.append((rel, size))
+        for rel, size in added:
+            out.append(("ok", f"  + pinned {rel} ({size} bytes)"))
+        for rel, reason in skipped:
+            out.append(("info", f"  · skipped {rel} ({reason})"))
+        audit.log_event(
+            s.meta_dir, s.session, "slash_command",
+            command="add", arg=arg, added=[r for r, _ in added],
+        )
+        _save_conversation(s.root, s.history, s.chat_model, pinned=s.pinned_paths)
+        return out
+
+    if user_input == ":dropall":
+        count = len(s.pinned_paths)
+        s.pinned_paths.clear()
+        out.append(("info", f"(:dropall: removed {count} pinned files)"))
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="dropall")
+        _save_conversation(s.root, s.history, s.chat_model, pinned=s.pinned_paths)
+        return out
+
+    if user_input.startswith(":drop"):
+        arg = user_input[len(":drop"):].strip()
+        if not arg:
+            out.append(("warn", ":drop usage: :drop <path-or-glob>"))
+            return out
+        if arg == "all":
+            count = len(s.pinned_paths)
+            s.pinned_paths.clear()
+            out.append(("info", f"(:drop all: removed {count} pinned files)"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="dropall")
+            _save_conversation(s.root, s.history, s.chat_model, pinned=s.pinned_paths)
+            return out
+        removed: list[str] = []
+        for rel in list(s.pinned_paths):
+            if rel == arg or Path(rel).match(arg):
+                s.pinned_paths.remove(rel)
+                removed.append(rel)
+        if not removed:
+            out.append(("warn", f"(:drop: no pinned files match {arg!r})"))
+        else:
+            for rel in removed:
+                out.append(("info", f"  - unpinned {rel}"))
+        audit.log_event(
+            s.meta_dir, s.session, "slash_command",
+            command="drop", arg=arg, removed=removed,
+        )
+        _save_conversation(s.root, s.history, s.chat_model, pinned=s.pinned_paths)
+        return out
+
+    if user_input == ":pinned":
+        if not s.pinned_paths:
+            out.append(("info", "(no pinned files; use :add <path> to add some)"))
+        else:
+            pinned_now = _load_pinned_files(s.pinned_paths, s.root)
+            total = sum(p["size"] for p in pinned_now)
+            out.append(("info", f"{len(pinned_now)} pinned file(s), {total} bytes total:"))
+            pinned_by_path = {p["path"]: p["size"] for p in pinned_now}
+            for rel in s.pinned_paths:
+                if rel in pinned_by_path:
+                    out.append(("info", f"  - {rel} ({pinned_by_path[rel]} bytes)"))
+                else:
+                    out.append(("warn", f"  - {rel} (missing or unreadable)"))
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="pinned")
+        return out
+
+    if user_input.startswith(":search"):
+        query = user_input[len(":search"):].strip()
+        if not s.allow_web:
+            out.append(("err", ":search requires --allow-web at session start"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="search", error="not allowed")
+            return out
+        if not query:
+            out.append(("warn", ":search usage: :search <query>"))
+            return out
+        from . import web as web_mod
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="search", arg=query)
+        r = web_mod.web_search(query, searxng_url=s.searxng_url, top_k=10)
+        audit.log_event(s.meta_dir, s.session, "tool_result", tool="web_search",
+                        result={k: v for k, v in r.items() if k != "results"})
+        if not r.get("ok"):
+            out.append(("err", f"  search error: {r.get('error')}"))
+        else:
+            for i, hit in enumerate(r.get("results", []), 1):
+                out.append(("info", f"  [{i}] {hit.get('title') or '(no title)'}"))
+                out.append(("info", f"       {hit.get('url')}"))
+        s.history.append({
+            "role": "user",
+            "content": f"I ran web_search({query!r}) and got:\n```\n{json.dumps(r, indent=2)}\n```",
+        })
+        return out
+
+    if user_input.startswith(":fetch"):
+        url = user_input[len(":fetch"):].strip()
+        if not s.allow_web:
+            out.append(("err", ":fetch requires --allow-web at session start"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="fetch", error="not allowed")
+            return out
+        if not url:
+            out.append(("warn", ":fetch usage: :fetch <url>"))
+            return out
+        from . import web as web_mod
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="fetch", arg=url)
+        web_cache_dir = s.meta_dir / "web_cache"
+        r = web_mod.web_fetch(
+            url,
+            allow_patterns=tuple(s.web_allow),
+            block_patterns=tuple(s.web_block),
+            cache_dir=web_cache_dir,
+        )
+        audit.log_event(s.meta_dir, s.session, "tool_result", tool="web_fetch",
+                        result={k: v for k, v in r.items() if k != "content"})
+        if not r.get("ok"):
+            out.append(("err", f"  fetch error: {r.get('error')}"))
+        else:
+            marker = " (cached)" if r.get("cached") else ""
+            out.append(("info", f"  [{r.get('status', '?')} · {r.get('url')}{marker}]"))
+            if r.get("title"):
+                out.append(("info", f"  Title: {r['title']}"))
+        s.history.append({
+            "role": "user",
+            "content": f"I ran web_fetch({url!r}) and got:\n```\n{json.dumps(r, indent=2)[:4000]}\n```",
+        })
+        return out
+
+    if user_input.startswith(":run"):
+        cmd = user_input[len(":run"):].strip()
+        if not s.allow_shell:
+            out.append(("err", ":run requires --allow-shell at session start"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="run", error="not allowed")
+            return out
+        if not cmd:
+            out.append(("warn", ":run usage: :run <command>"))
+            return out
+        if not yn(f"Run `{cmd}`? [y/N]"):
+            out.append(("info", "(aborted)"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="run", arg=cmd, aborted=True)
+            return out
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="run", arg=cmd, runner=s.shell_runner)
+        result_dict = run_shell(
+            s.root, cmd, timeout=s.shell_timeout, runner=s.shell_runner, shell_network=s.shell_network,
+        )
+        audit.log_event(
+            s.meta_dir, s.session, "tool_result",
+            tool="run_shell", duration_s=result_dict.get("duration_s"),
+            result={k: v for k, v in result_dict.items() if k != "output"},
+        )
+        out.append(("info", f"  [exit {result_dict.get('exit_code', '?')} · {result_dict.get('duration_s', 0)}s]"))
+        raw_out = result_dict.get("output") or ""
+        if raw_out:
+            cleaned = raw_out
+            if cleaned.startswith(UNTRUSTED_BEGIN):
+                cleaned = cleaned[len(UNTRUSTED_BEGIN):].lstrip("\n")
+            if cleaned.endswith(UNTRUSTED_END):
+                cleaned = cleaned[: -len(UNTRUSTED_END)].rstrip("\n")
+            out.append(("info", cleaned))
+        s.history.append({
+            "role": "user",
+            "content": (
+                f"I ran `{cmd}` and got:\n"
+                f"```\n{json.dumps(result_dict, indent=2)}\n```"
+            ),
+        })
+        return out
+
+    if user_input == ":gitstatus":
+        if not gitops.is_git_repo(s.root):
+            out.append(("err", ":gitstatus requires a git repo at the project root"))
+        else:
+            git_out = gitops.status_short(s.root)
+            out.append(("info", git_out if git_out.strip() else "(working tree clean)"))
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="gitstatus")
+        return out
+
+    if user_input.startswith(":diff"):
+        arg = user_input[len(":diff"):].strip() or None
+        if not gitops.is_git_repo(s.root):
+            out.append(("err", ":diff requires a git repo at the project root"))
+        else:
+            d = gitops.pending_diff(s.root, arg)
+            out.append(("info", d if d.strip() else "(no pending changes)"))
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="diff", arg=arg or "")
+        return out
+
+    if user_input.startswith(":commit"):
+        arg = user_input[len(":commit"):].strip()
+        if not gitops.is_git_repo(s.root):
+            out.append(("err", ":commit requires a git repo at the project root"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="commit", error="not a git repo")
+            return out
+        if not gitops.has_pending_changes(s.root):
+            out.append(("info", "(nothing to commit; working tree is clean)"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="commit", error="clean tree")
+            return out
+        if not s.touched_files:
+            out.append((
+                "warn",
+                "(no model edits this session; refusing to commit user changes — "
+                "use plain `git commit` for those)",
+            ))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="commit", error="no touched files")
+            return out
+        paths_to_stage = sorted(s.touched_files)
+        stat = gitops.diff_stat(s.root, paths_to_stage)
+        if stat.strip():
+            out.append(("info", stat.rstrip("\n")))
+        else:
+            out.append(("warn", "(touched files appear unchanged on disk — model edits may have been reverted)"))
+        message = arg or _last_assistant_summary(s.history)
+        if not yn(f"Commit as '{gitops.COMMIT_TAG} {message}'? [Y/n]"):
+            out.append(("info", "(aborted)"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="commit", aborted=True)
+            return out
+        result = gitops.commit_pending(s.root, message, paths=paths_to_stage)
+        if result["ok"]:
+            out.append(("ok", f"  Committed {result['short']} ({len(result['files'])} file(s))"))
+            s.touched_files.clear()
+        else:
+            out.append(("err", f"  Commit failed: {result['error']}"))
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="commit", result=result)
+        return out
+
+    if user_input == ":undo":
+        if not gitops.is_git_repo(s.root):
+            out.append(("err", ":undo requires a git repo at the project root"))
+            return out
+        last = gitops.last_codebase_rag_commit(s.root)
+        if last is None:
+            out.append(("info", "(no [codebase-rag] commits found in history)"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="undo", error="none found")
+            return out
+        out.append(("info", f"Last codebase-rag commit: {last['short']} — {last['subject']}"))
+        out.append(("info", f"Files: {', '.join(last['files']) if last['files'] else '(none)'}"))
+        if not yn("Revert this commit? [y/N]"):
+            out.append(("info", "(aborted)"))
+            audit.log_event(s.meta_dir, s.session, "slash_command", command="undo", aborted=True)
+            return out
+        result = gitops.undo_last(s.root)
+        if result["ok"]:
+            out.append(("ok", f"  Reverted {result['reverted_sha']} via {result['revert_sha']}"))
+        else:
+            out.append(("err", f"  Undo failed: {result['error']}"))
+        audit.log_event(s.meta_dir, s.session, "slash_command", command="undo", result=result)
+        return out
+
+    return None
+
+
+# ---------- Line driver: top-level chat loop ----------
+
+
+def _print_dispatch_lines(lines: list[tuple[str, str]]) -> bool:
+    """Print dispatcher output via plain stdout. Returns True if the
+    session should exit (an `('exit', ...)` line was seen)."""
+    should_exit = False
+    for level, text in lines:
+        if level == "exit":
+            should_exit = True
+            continue
+        if text:
+            print(text)
+    return should_exit
+
+
+def _line_confirm(prompt: str) -> bool:
+    try:
+        ans = input(f"{prompt} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    # Default ([Y/n]) → empty == yes. Default ([y/N]) → empty == no.
+    if prompt.endswith("[Y/n]"):
+        return ans not in ("n", "no")
+    return ans in ("y", "yes")
+
+
+def agent_loop(
+    db_path: Path,
+    root: Path,
+    *,
+    show_context: bool = False,
+    model: str | None = None,
+    verbose: bool = False,
+    resume: bool = False,
+    read_only: bool = False,
+    allow_shell: bool = False,
+    shell_timeout: float = 30,
+    shell_runner: str = "host",
+    shell_network: str = "none",
+    confirm_writes: bool = True,
+    allow_web: bool = False,
+    web_allow: tuple[str, ...] = (),
+    web_block: tuple[str, ...] = (),
+    searxng_url: str = "",
+    architect_model: str | None = None,
+    provider_name: str = "ollama",
+    api_key: str | None = None,
+) -> None:
+    """Line-oriented chat. Init session, print banner, drive turn generator
+    for each user input. Same surface as before the TUI refactor — kwargs,
+    output, slash commands, and audit events all preserved."""
+    s = init_chat_session(
+        db_path, root,
+        model=model, show_context=show_context, verbose=verbose, resume=resume,
+        read_only=read_only, allow_shell=allow_shell,
+        shell_timeout=shell_timeout, shell_runner=shell_runner,
+        shell_network=shell_network, confirm_writes=confirm_writes,
+        allow_web=allow_web, web_allow=web_allow, web_block=web_block,
+        searxng_url=searxng_url, architect_model=architect_model,
+        provider_name=provider_name, api_key=api_key,
+    )
+    if s is None:
+        return
+    s.on_change_error = lambda p, e: print(f"  (reindex failed for {p}: {e})")
+    _print_banner(s)
+
+    while True:
+        try:
+            user_input = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            audit.log_event(s.meta_dir, s.session, "session_end", reason="eof")
+            return
+        if not user_input:
+            continue
+        dispatch = dispatch_slash(s, user_input, confirm=_line_confirm)
+        if dispatch is not None:
+            if _print_dispatch_lines(dispatch):
+                return
+            continue
+
+        # Not a slash command — run an agent turn.
+        turn_gen = agent_turn(s, user_input, verbose=verbose)
+        try:
+            _drive_line(s, turn_gen, verbose=verbose, show_context=show_context)
+        finally:
+            try:
+                turn_gen.close()
+            except Exception:
+                pass
 
         try:
-            _save_conversation(root, history, chat_model, pinned=pinned_paths)
+            _save_conversation(s.root, s.history, s.chat_model, pinned=s.pinned_paths)
         except OSError as e:
             print(f"(could not save conversation: {e})")
