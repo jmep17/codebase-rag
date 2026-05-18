@@ -21,7 +21,7 @@ Defenses against prompt injection in retrieved content / tool results:
 
 - Retrieved chunks, file contents, web pages, and shell output are wrapped in `<<<UNTRUSTED-...>>>` markers and the system prompt tells the model to treat anything between them as data, not instructions.
 - `--read-only` removes write/edit/shell tools from the model's schema entirely.
-- `--confirm-writes` prompts you before every `write_file` / `edit_file` executes.
+- By default, every model-driven `write_file` / `edit_file` prompts for approval before it executes. Use `--no-confirm-writes` only if you want writes/edits auto-applied.
 - `--web-allow` / `--web-block` cap which hosts `web_fetch` may contact (post-redirect host re-checked).
 - Every tool call and slash command is recorded in a per-project `audit.log` (`codebase-rag audit` to view).
 
@@ -35,6 +35,35 @@ ollama pull nomic-embed-text
 
 pip install -e .
 ```
+
+### Install troubleshooting
+
+If `pip install -e .` fails after activating a virtual environment, first make sure `pip` belongs to that environment:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+
+python -m pip --version
+python -m pip install -e .
+```
+
+Using `python -m pip` avoids accidentally calling a system `pip` or a `pip` from another environment. The version output should point somewhere under this repo's `.venv/`.
+
+If editable installs are blocked or unsupported, a normal install is fine:
+
+```bash
+python -m pip install .
+```
+
+If dependency downloads are blocked by your network or package policy, install the runtime dependencies from your approved package source first, then install this package without resolving dependencies:
+
+```bash
+python -m pip install ollama chromadb
+python -m pip install -e . --no-deps
+```
+
+For Python environments that report an "externally managed environment" error, create and activate a virtual environment instead of installing into the system Python. `codebase-rag` requires Python 3.10+.
 
 ## Usage
 
@@ -138,6 +167,105 @@ codebase-rag chat
 
 Each indexed project lives in its own ChromaDB collection, keyed by the absolute path you indexed. `chat` (and `search`/`show`) defaults the scope to the current working directory — `cd ~/code/project-a && codebase-rag chat` only retrieves chunks from project-a, never from any other project you've indexed. Use `--root <path>` to talk to a different project's index from somewhere else.
 
+## CLI flag reference
+
+Most commands accept either a project root (`--root` / `--for-project`) or database path (`--db`). The default database is `~/.codebase-rag/db`; project-specific metadata such as notes, conversations, web cache, and audit logs lives under `~/.codebase-rag/meta/<project-hash>/`.
+
+### Indexing and retrieval
+
+| Command | Flag | What it does | Example |
+|---|---|---|---|
+| `index PATH` | `--db PATH` | Store vectors in a non-default ChromaDB directory. | `codebase-rag index ~/code/app --db ~/.cache/cbr/app-db` |
+| `index PATH` | `--exclude GLOB`, `-x GLOB` | Skip files matching a glob; repeatable. | `codebase-rag index ~/code/app -x 'fixtures/*' -x '*.generated.ts'` |
+| `reindex PATH` | `--db PATH` | Rebuild the project index in a non-default DB. | `codebase-rag reindex ~/code/app --db ~/.cache/cbr/app-db` |
+| `reindex PATH` | `--exclude GLOB`, `-x GLOB` | Skip files during rebuild; repeatable. | `codebase-rag reindex ~/code/app --exclude 'dist/*'` |
+| `stats` | `--db PATH` | Inspect a non-default DB. | `codebase-rag stats --db ~/.cache/cbr/app-db` |
+| `stats` | `--root PATH` | Show details for one indexed project instead of listing all projects. | `codebase-rag stats --root ~/code/app` |
+| `search QUERY` | `--db PATH` | Search a non-default DB. | `codebase-rag search 'auth middleware' --db ~/.cache/cbr/app-db` |
+| `search QUERY` | `--root PATH` | Search a project other than the current directory. | `codebase-rag search 'database setup' --root ~/code/app` |
+| `search QUERY` | `--top-k N`, `-k N` | Return `N` chunks instead of the default 5. | `codebase-rag search 'token validation' --top-k 12` |
+| `search QUERY` | `--file GLOB`, `-f GLOB` | Restrict results to matching indexed paths. | `codebase-rag search 'auth' --file 'src/middleware/*'` |
+| `search QUERY` | `--headers-only` | Print only file/line headers, not chunk text. | `codebase-rag search 'auth' --headers-only` |
+| `show GLOB` | `--db PATH` | Read chunks from a non-default DB. | `codebase-rag show 'src/*.py' --db ~/.cache/cbr/app-db` |
+| `show GLOB` | `--root PATH` | Show indexed chunks for a project other than the current directory. | `codebase-rag show 'src/auth.py' --root ~/code/app` |
+
+### Project notes and references
+
+| Command | Flag | What it does | Example |
+|---|---|---|---|
+| `notes` | `--root PATH` | Read or edit notes for a project other than the current directory. | `codebase-rag notes --root ~/code/app` |
+| `notes` | `--edit` | Open the notes file in `$EDITOR` (`vi` fallback). | `codebase-rag notes --edit` |
+| `notes` | `--set TEXT` | Replace notes with `TEXT`; use `-` to read from stdin. | `codebase-rag notes --set 'Django app; prefer small patches.'` |
+| `notes` | `--append TEXT` | Append `TEXT`; use `-` to read from stdin. | `codebase-rag notes --append 'Avoid legacy/v1 unless asked.'` |
+| `notes` | `--clear` | Delete the notes file. | `codebase-rag notes --clear` |
+| `add-reference SOURCE` | `--label NAME` | Name the reference set; defaults to the source directory name. | `codebase-rag add-reference ~/docs/api --label api-spec` |
+| `add-reference SOURCE` | `--for-project PATH` | Attach references to a project other than the current directory. | `codebase-rag add-reference ~/docs/api --for-project ~/code/app` |
+| `add-reference SOURCE` | `--db PATH` | Store reference chunks in a non-default DB. | `codebase-rag add-reference ~/docs/api --db ~/.cache/cbr/app-db` |
+| `add-reference SOURCE` | `--exclude GLOB`, `-x GLOB` | Skip matching files inside the reference source; repeatable. | `codebase-rag add-reference ~/docs/api -x 'archive/*'` |
+| `remove-reference LABEL` | `--for-project PATH` | Remove the label from a project other than the current directory. | `codebase-rag remove-reference api-spec --for-project ~/code/app` |
+| `remove-reference LABEL` | `--db PATH` | Remove reference chunks from a non-default DB. | `codebase-rag remove-reference api-spec --db ~/.cache/cbr/app-db` |
+
+### Chat
+
+| Flag | What it does | Example |
+|---|---|---|
+| `--db PATH` | Use a non-default index database. | `codebase-rag chat --db ~/.cache/cbr/app-db` |
+| `--root PATH` | Project root the agent may retrieve from and use tools against. | `codebase-rag chat --root ~/code/app` |
+| `--model NAME` | Ollama chat model; overrides `CODEBASE_RAG_CHAT_MODEL` and the default `mistral-nemo`. | `codebase-rag chat --model qwen3:8b` |
+| `--show-context` | Print retrieved file paths and line ranges for each turn. | `codebase-rag chat --show-context` |
+| `--verbose`, `-v` | Print timing/token stats and full tool results. | `codebase-rag chat --verbose` |
+| `--resume` | Continue the last saved conversation for this project. | `codebase-rag chat --resume` |
+| `--read-only` | Expose only read/grep tools; disables writes, edits, and shell. | `codebase-rag chat --read-only` |
+| `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven writes/edits; default is on. | `codebase-rag chat --no-confirm-writes` |
+| `--allow-shell` | Enable model-driven `run_shell` and user-driven `:run`; each command prompts before execution. | `codebase-rag chat --allow-shell` |
+| `--shell-timeout SECONDS` | Per-command shell timeout; default 30. | `codebase-rag chat --allow-shell --shell-timeout 90` |
+| `--shell-runner host\|docker:IMAGE` | Run shell commands on the host or in a transient Docker container. | `codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim` |
+| `--shell-network none\|bridge\|host` | Docker network mode for shell commands; default `none`. | `codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim --shell-network none` |
+| `--allow-web` | Enable SearXNG search and URL fetch tools; requires `SEARXNG_URL`. | `SEARXNG_URL=http://127.0.0.1:8080 codebase-rag chat --allow-web` |
+| `--web-allow HOST_GLOB` | Allow `web_fetch` only for matching hosts; repeatable. | `codebase-rag chat --allow-web --web-allow docs.python.org` |
+| `--web-block HOST_GLOB` | Block `web_fetch` for matching hosts; repeatable and takes precedence. | `codebase-rag chat --allow-web --web-block '*.social.example'` |
+| `--architect-model NAME` | Use a planning model first, then let `--model` execute with tools. | `codebase-rag chat --architect-model qwen3:30b-a3b --model qwen2.5-coder:7b` |
+| `--provider ollama\|anthropic` | Select chat provider; Anthropic is opt-in cloud and requires `[cloud]` plus `ANTHROPIC_API_KEY`. | `codebase-rag chat --provider anthropic --model claude-opus-4-7` |
+| `--tui` | Launch the Textual interface; requires `pip install -e .[tui]`. | `codebase-rag chat --tui` |
+
+### Audit
+
+| Flag | What it does | Example |
+|---|---|---|
+| `--root PATH` | Read the audit log for a project other than the current directory. | `codebase-rag audit --root ~/code/app` |
+| `--tool NAME` | Show only events for a tool such as `grep` or `edit_file`. | `codebase-rag audit --tool edit_file` |
+| `--event NAME` | Show only one event type, such as `tool_call`, `tool_result`, `slash_command`, `session_start`, or `session_end`. | `codebase-rag audit --event tool_call` |
+| `--since WHEN` | Filter by time, e.g. `today`, `yesterday`, `15m`, `2h`, `7d`, or an ISO date. | `codebase-rag audit --since 2h` |
+| `--limit N` | Limit rows; default 50, `0` means all. | `codebase-rag audit --limit 100` |
+| `--pretty` | Pretty-print each audit entry over multiple lines. | `codebase-rag audit --pretty` |
+
+### Serve
+
+`serve` starts the local HTTP/WebSocket backend. It requires `pip install -e .[serve]`.
+
+| Flag | What it does | Example |
+|---|---|---|
+| `--host HOST` | Bind address; default `127.0.0.1` or `CODEBASE_RAG_SERVE_HOST`. Non-loopback hosts print a warning. | `codebase-rag serve --host 127.0.0.1` |
+| `--port PORT` | Bind port; default `8723` or `CODEBASE_RAG_SERVE_PORT`. | `codebase-rag serve --port 9000` |
+| `--db PATH` | Use a non-default index database. | `codebase-rag serve --db ~/.cache/cbr/app-db` |
+| `--root PATH` | Default project root for browser/WebSocket sessions. | `codebase-rag serve --root ~/code/app` |
+| `--static DIR` | Serve a built SPA bundle at `/`. | `codebase-rag serve --static web/dist` |
+| `--reuse-token` | Keep the existing bearer token instead of rotating on start. | `codebase-rag serve --reuse-token` |
+| `--token-file PATH` | Store/read the bearer token at a custom path. | `codebase-rag serve --token-file ~/.cache/cbr/serve.token` |
+| `--quiet` | Suppress uvicorn access logs. | `codebase-rag serve --quiet` |
+| `--model NAME` | Default chat model for WebSocket sessions. | `codebase-rag serve --model qwen3:8b` |
+| `--provider ollama\|anthropic` | Default chat provider for WebSocket sessions. | `codebase-rag serve --provider anthropic --model claude-opus-4-7` |
+| `--architect-model NAME` | Optional planning model for WebSocket sessions. | `codebase-rag serve --architect-model qwen3:30b-a3b --model qwen2.5-coder:7b` |
+| `--read-only` | Default WebSocket chats to read-only tools. | `codebase-rag serve --read-only` |
+| `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven writes/edits in WebSocket chats; default is on. | `codebase-rag serve --no-confirm-writes` |
+| `--allow-shell` | Enable shell tools for WebSocket chats. | `codebase-rag serve --allow-shell` |
+| `--shell-runner host\|docker:IMAGE` | Shell execution backend for WebSocket chats. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim` |
+| `--shell-network none\|bridge\|host` | Docker network mode for WebSocket shell commands. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim --shell-network none` |
+| `--shell-timeout SECONDS` | Per-command shell timeout for WebSocket chats. | `codebase-rag serve --allow-shell --shell-timeout 90` |
+| `--allow-web` | Enable web tools for WebSocket chats; requires `SEARXNG_URL`. | `SEARXNG_URL=http://127.0.0.1:8080 codebase-rag serve --allow-web` |
+| `--web-allow HOST_GLOB` | Allow matching `web_fetch` hosts; repeatable. | `codebase-rag serve --allow-web --web-allow docs.python.org` |
+| `--web-block HOST_GLOB` | Block matching `web_fetch` hosts; repeatable and takes precedence. | `codebase-rag serve --allow-web --web-block '*.social.example'` |
+
 ### Project notes & reference docs
 
 Two extra sources of context, both stored **outside the repo** so nothing extra ends up in your project:
@@ -183,7 +311,7 @@ References are stored in the project's ChromaDB collection but tagged `kind=refe
 
 ## Advanced chat flags
 
-Everything below is opt-in. Default `codebase-rag chat` behaves exactly as before.
+Web, shell, cloud provider, TUI, and architect mode are opt-in. Default `codebase-rag chat` keeps web/shell/cloud off and prompts before model-driven writes/edits.
 
 ### Conversation continuity
 
@@ -269,11 +397,12 @@ codebase-rag chat --provider anthropic --model claude-opus-4-7
 
 Chat content goes to api.anthropic.com — a startup banner warns you. Embeddings stay on Ollama either way.
 
-### Read-only & confirm-writes
+### Read-only & write confirmations
 
 ```bash
 codebase-rag chat --read-only          # write_file/edit_file/run_shell removed from schema
-codebase-rag chat --confirm-writes     # prompt with diff/preview before every write or edit
+codebase-rag chat                      # prompts before every write/edit by default
+codebase-rag chat --no-confirm-writes  # auto-apply model writes/edits
 ```
 
 ### Verbose logging
@@ -333,8 +462,8 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | ------------ | --------------------------------- | ----------------------------------------------------------------------- | --- |
 | `read_file`  | `path`                            | Returns full file content (wrapped in untrusted markers). Refuses files over 200KB. | always |
 | `grep`       | `pattern`, `file_glob?`, `literal?` | Regex-search every source file. Caps at 300 matches. **Use this for "list every / find all" queries.** | always |
-| `write_file` | `path`, `content`                 | Overwrites the file. Reads it back and reports bytes/lines written.     | not `--read-only` |
-| `edit_file`  | `path`, `old_string`, `new_string`| Replaces exactly one occurrence; errors on missing or ambiguous match.  | not `--read-only` |
+| `write_file` | `path`, `content`                 | Prompts by default, then overwrites the file. Reads it back and reports bytes/lines written. | not `--read-only` |
+| `edit_file`  | `path`, `old_string`, `new_string`| Prompts by default, then replaces exactly one occurrence; errors on missing or ambiguous match. | not `--read-only` |
 | `run_shell`  | `command`                         | Execute a command. Confirmation prompt fires before each run. shlex.split parsing, no shell expansion. Optional Docker runner. | `--allow-shell` |
 | `web_search` | `query`, `top_k?`                 | Search via your self-hosted SearXNG.                                    | `--allow-web` |
 | `web_fetch`  | `url`                             | Fetch a URL, extract main text via trafilatura, cache 24h.              | `--allow-web` |
