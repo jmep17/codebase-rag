@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -66,6 +68,26 @@ def main() -> None:
         type=Path,
         default=None,
         help="Show stats for a single project root. If omitted, lists all indexed projects.",
+    )
+
+    p_doctor = subparsers.add_parser(
+        "doctor",
+        help="Check local setup: project root, index DB, Ollama, optional extras, and tool runners.",
+    )
+    p_doctor.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_doctor.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root to check for an existing index (default: current working directory).",
+    )
+    p_doctor.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Chat model to check in Ollama (default: CODEBASE_RAG_CHAT_MODEL or built-in default).",
     )
 
     p_search = subparsers.add_parser(
@@ -461,6 +483,8 @@ def main() -> None:
         index_mod.build_index(args.path, args.db, extra_excludes=args.exclude)
     elif args.command == "stats":
         index_mod.stats(args.db, root=args.root)
+    elif args.command == "doctor":
+        _handle_doctor(args)
     elif args.command == "search":
         if not args.root.exists():
             print(f"Root does not exist: {args.root}", file=sys.stderr)
@@ -661,6 +685,127 @@ def main() -> None:
                 architect_model=args.architect_model,
             ),
         )
+
+
+def _has_modules(*names: str) -> tuple[bool, list[str]]:
+    missing = [name for name in names if importlib.util.find_spec(name) is None]
+    return not missing, missing
+
+
+def _doctor_row(status: str, label: str, detail: str = "") -> None:
+    suffix = f" - {detail}" if detail else ""
+    print(f"[{status}] {label}{suffix}")
+
+
+def _ollama_model_names() -> list[str]:
+    import ollama
+
+    data = ollama.list()
+    raw_models = data.get("models", []) if isinstance(data, dict) else getattr(data, "models", [])
+    names: list[str] = []
+    for model in raw_models:
+        if isinstance(model, dict):
+            name = model.get("model") or model.get("name")
+        else:
+            name = getattr(model, "model", None) or getattr(model, "name", None)
+        if name:
+            names.append(str(name))
+    return names
+
+
+def _handle_doctor(args: argparse.Namespace) -> None:
+    failures = 0
+    warnings = 0
+    root = args.root.resolve()
+    chat_model = chat_mod._resolve_model(args.model)
+
+    print(f"codebase-rag doctor")
+    print(f"Project: {root}")
+    print(f"Database: {args.db}")
+    print()
+
+    if root.exists() and root.is_dir():
+        _doctor_row("ok", "project root", str(root))
+    else:
+        failures += 1
+        _doctor_row("fail", "project root", "path does not exist or is not a directory")
+
+    if args.db.exists():
+        try:
+            import chromadb
+
+            client = chromadb.PersistentClient(
+                path=str(args.db), settings=index_mod.CHROMA_SETTINGS,
+            )
+            collection_name = index_mod.collection_name_for(root)
+            collections = client.list_collections()
+            if any(col.name == collection_name for col in collections):
+                collection = client.get_collection(collection_name)
+                _doctor_row(
+                    "ok",
+                    "project index",
+                    f"{collection.count()} chunks in {collection_name}",
+                )
+            else:
+                warnings += 1
+                _doctor_row(
+                    "warn",
+                    "project index",
+                    "no collection for this root; run `codebase-rag index .`",
+                )
+        except Exception as e:
+            failures += 1
+            _doctor_row("fail", "index database", f"{type(e).__name__}: {e}")
+    else:
+        warnings += 1
+        _doctor_row("warn", "index database", "not found; run `codebase-rag index <path>`")
+
+    try:
+        models = _ollama_model_names()
+        _doctor_row("ok", "ollama daemon", f"{len(models)} model(s) visible")
+        for model in (chat_model, index_mod.EMBEDDING_MODEL):
+            if model in models:
+                _doctor_row("ok", f"ollama model {model}")
+            else:
+                warnings += 1
+                _doctor_row("warn", f"ollama model {model}", f"run `ollama pull {model}`")
+    except Exception as e:
+        failures += 1
+        _doctor_row("fail", "ollama daemon", f"{type(e).__name__}: {e}")
+
+    extras = [
+        ("web extra", ("httpx", "trafilatura")),
+        ("cloud extra", ("anthropic",)),
+        ("tui extra", ("textual",)),
+        ("serve extra", ("starlette", "uvicorn", "websockets")),
+    ]
+    for label, modules in extras:
+        ok, missing = _has_modules(*modules)
+        if ok:
+            _doctor_row("ok", label, "installed")
+        else:
+            warnings += 1
+            _doctor_row("warn", label, f"missing {', '.join(missing)}")
+
+    searxng_url = os.environ.get("SEARXNG_URL", "")
+    if searxng_url:
+        _doctor_row("ok", "SEARXNG_URL", searxng_url)
+    else:
+        warnings += 1
+        _doctor_row("warn", "SEARXNG_URL", "unset; --allow-web will fail until configured")
+
+    docker = shutil.which("docker")
+    if docker:
+        _doctor_row("ok", "docker", docker)
+    else:
+        warnings += 1
+        _doctor_row("warn", "docker", "not on PATH; docker shell runner unavailable")
+
+    print()
+    if failures:
+        print(f"doctor finished with {failures} failure(s) and {warnings} warning(s).")
+        sys.exit(1)
+    print(f"doctor finished with {warnings} warning(s).")
 
 
 def _handle_audit(args: argparse.Namespace) -> None:
