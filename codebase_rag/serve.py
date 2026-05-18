@@ -222,6 +222,22 @@ def _make_confirm_preview(tname: str, args: dict, session: chat_mod.ChatSession)
             "total_lines": len(lines),
             "bytes": len(content.encode("utf-8")),
         }
+    if tname == "create_project":
+        files = args.get("files")
+        if isinstance(files, list):
+            paths = [item.get("path", "?") for item in files[:12] if isinstance(item, dict)]
+            total_files = len(files)
+        else:
+            paths = ["README.md", ".gitignore"]
+            total_files = 2
+        return {
+            "kind": "create_project",
+            "project_path": args.get("project_path", ""),
+            "description": args.get("description", ""),
+            "file_paths": paths,
+            "total_files": total_files,
+            "overwrite": bool(args.get("overwrite")),
+        }
     if tname == "run_shell":
         return {
             "kind": "run_shell",

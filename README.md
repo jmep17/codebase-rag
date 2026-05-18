@@ -16,12 +16,13 @@ Local codebase RAG with Ollama. Index your code, ask questions, get answers grou
 | `--provider anthropic` | api.anthropic.com (chat only; embeddings stay local) | Off |
 | `--allow-shell` (host) | None | Off; commands run on host |
 | `--allow-shell --shell-runner docker:IMAGE` | Only what you allow via `--shell-network` (default `none`) | Off |
+| `train` | None; writes local artifacts and can call local Ollama with `--create` | On demand |
 
 Defenses against prompt injection in retrieved content / tool results:
 
 - Retrieved chunks, file contents, web pages, and shell output are wrapped in `<<<UNTRUSTED-...>>>` markers and the system prompt tells the model to treat anything between them as data, not instructions.
-- `--read-only` removes write/edit/shell tools from the model's schema entirely.
-- By default, every model-driven `write_file` / `edit_file` prompts for approval before it executes. Use `--no-confirm-writes` only if you want writes/edits auto-applied.
+- `--read-only` removes create/write/edit/shell tools from the model's schema entirely.
+- By default, every model-driven `create_project`, `write_file`, or `edit_file` prompts for approval before it executes. Use `--no-confirm-writes` only if you want writes/edits auto-applied.
 - `--web-allow` / `--web-block` cap which hosts `web_fetch` may contact (post-redirect host re-checked).
 - Every tool call and slash command is recorded in a per-project `audit.log` (`codebase-rag audit` to view).
 
@@ -235,6 +236,15 @@ Most commands accept either a project root (`--root` / `--for-project`) or datab
 | `notes` | `--set TEXT` | Replace notes with `TEXT`; use `-` to read from stdin. | `codebase-rag notes --set 'Django app; prefer small patches.'` |
 | `notes` | `--append TEXT` | Append `TEXT`; use `-` to read from stdin. | `codebase-rag notes --append 'Avoid legacy/v1 unless asked.'` |
 | `notes` | `--clear` | Delete the notes file. | `codebase-rag notes --clear` |
+| `train` | `--root PATH` | Build assistant artifacts from a project other than the current directory. | `codebase-rag train --root ~/code/app` |
+| `train` | `--profile TEXT` | Add personal preferences to the generated assistant profile; use `-` to read stdin. | `codebase-rag train --profile 'Prefer small, reviewed patches.'` |
+| `train` | `--profile-file PATH` | Read personal preferences from a local file. | `codebase-rag train --profile-file ~/assistant-style.md` |
+| `train` | `--output PATH` | Write artifacts somewhere other than the default project meta directory. | `codebase-rag train --output ~/.codebase-rag/my-assistant` |
+| `train` | `--name NAME` | Name the generated Ollama model. | `codebase-rag train --name my-coder` |
+| `train` | `--base-model NAME` | Use a different local Ollama base model in the Modelfile. | `codebase-rag train --base-model qwen2.5-coder:7b` |
+| `train` | `--no-conversation` | Skip exporting examples from the last saved conversation. | `codebase-rag train --no-conversation` |
+| `train` | `--max-examples N` | Limit exported assistant-response examples. | `codebase-rag train --max-examples 50` |
+| `train` | `--create` | Run local `ollama create <name> -f Modelfile` after writing files. | `codebase-rag train --name my-coder --create` |
 | `add-reference SOURCE` | `--label NAME` | Name the reference set; defaults to the source directory name. | `codebase-rag add-reference ~/docs/api --label api-spec` |
 | `add-reference SOURCE` | `--for-project PATH` | Attach references to a project other than the current directory. | `codebase-rag add-reference ~/docs/api --for-project ~/code/app` |
 | `add-reference SOURCE` | `--db PATH` | Store reference chunks in a non-default DB. | `codebase-rag add-reference ~/docs/api --db ~/.cache/cbr/app-db` |
@@ -252,8 +262,8 @@ Most commands accept either a project root (`--root` / `--for-project`) or datab
 | `--show-context` | Print retrieved file paths and line ranges for each turn. | `codebase-rag chat --show-context` |
 | `--verbose`, `-v` | Print timing/token stats and full tool results. | `codebase-rag chat --verbose` |
 | `--resume` | Continue the last saved conversation for this project. | `codebase-rag chat --resume` |
-| `--read-only` | Expose only read/grep tools; disables writes, edits, and shell. | `codebase-rag chat --read-only` |
-| `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven writes/edits; default is on. | `codebase-rag chat --no-confirm-writes` |
+| `--read-only` | Expose only read/grep tools; disables project creation, writes, edits, and shell. | `codebase-rag chat --read-only` |
+| `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven project creation, writes, and edits; default is on. | `codebase-rag chat --no-confirm-writes` |
 | `--allow-shell` | Enable model-driven `run_shell` and user-driven `:run`; each command prompts before execution. | `codebase-rag chat --allow-shell` |
 | `--shell-timeout SECONDS` | Per-command shell timeout; default 30. | `codebase-rag chat --allow-shell --shell-timeout 90` |
 | `--shell-runner host\|docker:IMAGE` | Run shell commands on the host or in a transient Docker container. | `codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim` |
@@ -294,7 +304,7 @@ Most commands accept either a project root (`--root` / `--for-project`) or datab
 | `--provider ollama\|anthropic` | Default chat provider for WebSocket sessions. | `codebase-rag serve --provider anthropic --model claude-opus-4-7` |
 | `--architect-model NAME` | Optional planning model for WebSocket sessions. | `codebase-rag serve --architect-model qwen3:30b-a3b --model qwen2.5-coder:7b` |
 | `--read-only` | Default WebSocket chats to read-only tools. | `codebase-rag serve --read-only` |
-| `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven writes/edits in WebSocket chats; default is on. | `codebase-rag serve --no-confirm-writes` |
+| `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven project creation, writes, and edits in WebSocket chats; default is on. | `codebase-rag serve --no-confirm-writes` |
 | `--allow-shell` | Enable shell tools for WebSocket chats. | `codebase-rag serve --allow-shell` |
 | `--shell-runner host\|docker:IMAGE` | Shell execution backend for WebSocket chats. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim` |
 | `--shell-network none\|bridge\|host` | Docker network mode for WebSocket shell commands. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim --shell-network none` |
@@ -319,6 +329,28 @@ codebase-rag notes --clear                           # delete
 ```
 
 Notes live at `~/.codebase-rag/meta/<hash>/notes.md`, keyed by the absolute project path.
+
+**Personal assistant training artifacts** — generate a local Ollama `Modelfile`
+plus chat-style JSONL examples from the project's last saved conversation.
+This is useful for making a project-specific coding assistant that remembers
+your notes and personal preferences without sending anything to a hosted service.
+
+```bash
+cd ~/code/my-project
+codebase-rag train --profile "Prefer small patches, cite files, keep summaries brief."
+
+# optional: create the local Ollama model immediately
+codebase-rag train --name my-project-coder --base-model qwen2.5-coder:7b --create
+
+# then use it normally
+codebase-rag chat --model my-project-coder
+```
+
+By default the generated files live at
+`~/.codebase-rag/meta/<hash>/assistant_training/`, outside your repository.
+`ollama create` personalizes the model recipe and system prompt; it does not
+fine-tune model weights. The exported `training.jsonl` can be used later with a
+separate local fine-tuning tool if you want weight training.
 
 **Reference docs** — external documents indexed alongside the project for retrieval. Each reference set has a label, so the model sees project chunks and reference chunks separately in context.
 
@@ -348,7 +380,7 @@ References are stored in the project's ChromaDB collection but tagged `kind=refe
 
 ## Advanced chat flags
 
-Web, shell, cloud provider, TUI, and architect mode are opt-in. Default `codebase-rag chat` keeps web/shell/cloud off and prompts before model-driven writes/edits.
+Web, shell, cloud provider, TUI, and architect mode are opt-in. Default `codebase-rag chat` keeps web/shell/cloud off and prompts before model-driven project creation, writes, and edits.
 
 ### Conversation continuity
 
@@ -437,9 +469,9 @@ Chat content goes to api.anthropic.com — a startup banner warns you. Embedding
 ### Read-only & write confirmations
 
 ```bash
-codebase-rag chat --read-only          # write_file/edit_file/run_shell removed from schema
-codebase-rag chat                      # prompts before every write/edit by default
-codebase-rag chat --no-confirm-writes  # auto-apply model writes/edits
+codebase-rag chat --read-only          # create_project/write_file/edit_file/run_shell removed from schema
+codebase-rag chat                      # prompts before every project creation/write/edit by default
+codebase-rag chat --no-confirm-writes  # auto-apply model project creation/writes/edits
 ```
 
 ### Verbose logging
@@ -459,9 +491,9 @@ codebase-rag audit --since '2h'         # also: today, yesterday, 15m, 7d, ISO d
 codebase-rag audit --event tool_call --pretty
 ```
 
-The model has these tools (subset depending on flags): `read_file`, `grep`, `write_file`, `edit_file`, plus `run_shell` with `--allow-shell` and `web_search` / `web_fetch` with `--allow-web`.
+The model has these tools (subset depending on flags): `read_file`, `grep`, `create_project`, `write_file`, `edit_file`, plus `run_shell` with `--allow-shell` and `web_search` / `web_fetch` with `--allow-web`.
 
-After every successful write or edit, the affected file is automatically re-chunked and the index is updated — no manual `reindex` needed for edits the agent makes.
+After every successful project creation, write, or edit, the affected files are automatically re-chunked and the index is updated — no manual `reindex` needed for edits the agent makes. If `create_project` is used to start a standalone project, index that new directory and restart chat with `--root` pointing at it.
 
 Show what was retrieved (useful for tuning):
 
@@ -488,8 +520,8 @@ codebase-rag chat --db ~/.codebase-rag/project-a --root ~/code/project-a
 2. **Chunk** each file into 50-line windows with 10-line overlap, keyed by `path:start-end`.
 3. **Embed** each chunk via Ollama's `nomic-embed-text` (batched 32 at a time).
 4. **Store** the vectors in a local Chroma collection.
-5. At query time, embed the question, retrieve the top 8 nearest chunks, and call `mistral-nemo` with `tools=[read_file, write_file, edit_file]` and the chunks as a `Context:` block.
-6. If the model emits tool calls, execute them (sandboxed under `--root`), feed each JSON result back as a `role: "tool"` message, and re-call the model. Loop until it stops emitting tool calls. Each successful `write_file` / `edit_file` re-chunks just that file.
+5. At query time, embed the question, retrieve the top 8 nearest chunks, and call `mistral-nemo` with `tools=[read_file, create_project, write_file, edit_file]` and the chunks as a `Context:` block.
+6. If the model emits tool calls, execute them (sandboxed under `--root`), feed each JSON result back as a `role: "tool"` message, and re-call the model. Loop until it stops emitting tool calls. Each successful `create_project`, `write_file`, or `edit_file` re-chunks affected files.
 
 The system prompt forbids the model from claiming a write succeeded until it sees a tool result with `"ok": true`, and forbids placeholders like `"..."` or `"[rest omitted]"` in file content.
 
@@ -499,6 +531,7 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | ------------ | --------------------------------- | ----------------------------------------------------------------------- | --- |
 | `read_file`  | `path`                            | Returns full file content (wrapped in untrusted markers). Refuses files over 200KB. | always |
 | `grep`       | `pattern`, `file_glob?`, `literal?` | Regex-search every source file. Caps at 300 matches. **Use this for "list every / find all" queries.** | always |
+| `create_project` | `project_path`, `description?`, `files?`, `overwrite?` | Prompts by default, then creates a new directory under `--root` with starter files. Returns commands to index and chat with it as its own project. | not `--read-only` |
 | `write_file` | `path`, `content`                 | Prompts by default, then overwrites the file. Reads it back and reports bytes/lines written. | not `--read-only` |
 | `edit_file`  | `path`, `old_string`, `new_string`| Prompts by default, then replaces exactly one occurrence; errors on missing or ambiguous match. | not `--read-only` |
 | `run_shell`  | `command`                         | Execute a command. Confirmation prompt fires before each run. shlex.split parsing, no shell expansion. Optional Docker runner. | `--allow-shell` |

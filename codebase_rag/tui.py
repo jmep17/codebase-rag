@@ -35,7 +35,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Input, Static
+from textual.widgets import Input, Markdown, Static
 
 from . import audit as audit_mod
 from . import chat as chat_mod
@@ -93,7 +93,8 @@ class ConfirmWriteModal(_ConfirmBase):
         self.tname = tname
 
     def compose(self) -> ComposeResult:
-        path = self.args.get("path", "?")
+        path = self.args.get("project_path") if self.tname == "create_project" else None
+        path = path or self.args.get("path", "?")
         with Vertical(classes="confirm-modal write"):
             yield Static(
                 f"[bold]✎ model wants to {self.tname}[/]",
@@ -107,6 +108,19 @@ class ConfirmWriteModal(_ConfirmBase):
             )
 
     def _build_preview(self) -> str:
+        if self.tname == "create_project":
+            files = self.args.get("files")
+            if isinstance(files, list):
+                paths = [item.get("path", "?") for item in files[:12] if isinstance(item, dict)]
+                file_count = len(files)
+            else:
+                paths = ["README.md", ".gitignore"]
+                file_count = 2
+            out = [f"[#5b8b73]{file_count} file(s)[/]"]
+            out.extend(f"+ {path}" for path in paths)
+            if file_count > len(paths):
+                out.append(f"... ({file_count - len(paths)} more files)")
+            return "\n".join(out)
         if self.tname == "edit_file":
             old = (self.args.get("old_string") or "").splitlines() or [""]
             new = (self.args.get("new_string") or "").splitlines() or [""]
@@ -873,7 +887,7 @@ class Turn(Vertical):
     def __init__(self, user_text: str) -> None:
         super().__init__(classes="turn")
         self.user_text = user_text
-        self._current_answer: Static | None = None
+        self._current_answer: Markdown | None = None
         self._answer_buf = ""
         self._tool_cards: dict[int, Static] = {}
         self._next_tool_key = 0
@@ -919,13 +933,20 @@ class Turn(Vertical):
     async def add_token(self, piece: str) -> None:
         if self._current_answer is None:
             self._answer_buf = ""
-            new_card = Static("", classes="card answer")
+            new_card = Markdown("", classes="card answer", open_links=False)
             await self.mount(new_card)
             self._current_answer = new_card
         self._answer_buf += piece
-        self._current_answer.update(self._answer_buf)
+        await self._current_answer.update(self._answer_buf)
 
     async def finalize_inference(self, content: str, stats: dict, provider_name: str) -> None:
+        if self._current_answer is None and content.strip():
+            self._answer_buf = content
+            self._current_answer = Markdown(content, classes="card answer", open_links=False)
+            await self.mount(self._current_answer)
+        elif self._current_answer is not None and content and content != self._answer_buf:
+            self._answer_buf = content
+            await self._current_answer.update(content)
         if self._current_answer is not None and not self._answer_buf.strip():
             await self._current_answer.remove()
         self._current_answer = None
@@ -1175,7 +1196,7 @@ class CodebaseRagApp(App):
             ),
             PaletteItem(
                 ":toggle-confirm-writes",
-                "flip write/edit confirmation on/off",
+                "flip create/write/edit confirmation on/off",
                 payload="toggle_confirm_writes",
             ),
             PaletteItem(":open-audit", "open the audit-log overlay", payload="open_audit"),

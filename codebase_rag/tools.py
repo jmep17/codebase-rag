@@ -80,6 +80,109 @@ def write_file(root: Path, path: str, content: str, on_change: Callable[[str], N
     }
 
 
+def create_project(
+    root: Path,
+    project_path: str,
+    on_change: Callable[[str], None],
+    *,
+    description: str = "",
+    files: list[dict] | None = None,
+    overwrite: bool = False,
+) -> dict:
+    """Create a new project directory under root, optionally with starter files."""
+    requested = Path(project_path)
+    if requested.is_absolute():
+        return {"ok": False, "error": "project_path must be relative to the session root"}
+    if not project_path.strip() or requested == Path("."):
+        return {"ok": False, "error": "project_path must name a new project directory"}
+
+    try:
+        project_root = resolve_safe(root, project_path)
+    except PermissionError as e:
+        return {"ok": False, "error": str(e)}
+    if project_root == root.resolve():
+        return {"ok": False, "error": "project_path must create a directory below the session root"}
+    if project_root.exists() and not project_root.is_dir():
+        return {"ok": False, "error": f"{project_path} exists and is not a directory"}
+
+    if files is None:
+        title = project_root.name
+        summary = description.strip() or "Project scaffold created by codebase-rag."
+        files = [
+            {"path": "README.md", "content": f"# {title}\n\n{summary}\n"},
+            {
+                "path": ".gitignore",
+                "content": (
+                    ".DS_Store\n.env\n.venv/\n__pycache__/\n*.pyc\nnode_modules/\ndist/\nbuild/\n"
+                ),
+            },
+        ]
+
+    if not isinstance(files, list):
+        return {"ok": False, "error": "files must be a list of {path, content} objects"}
+    if len(files) > 50:
+        return {"ok": False, "error": "files limit is 50 per create_project call"}
+
+    root_resolved = root.resolve()
+    planned: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    total_bytes = 0
+    for i, item in enumerate(files, 1):
+        if not isinstance(item, dict):
+            return {"ok": False, "error": f"file entry {i} must be an object"}
+        rel_path = item.get("path")
+        content = item.get("content")
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            return {"ok": False, "error": f"file entry {i} missing path"}
+        if Path(rel_path).is_absolute():
+            return {"ok": False, "error": f"file entry {i} path must be relative"}
+        if not isinstance(content, str):
+            return {"ok": False, "error": f"file entry {i} content must be a string"}
+        try:
+            dest = resolve_safe(project_root, rel_path)
+        except PermissionError as e:
+            return {"ok": False, "error": f"file entry {i}: {e}"}
+        if dest == project_root or dest.name == "":
+            return {"ok": False, "error": f"file entry {i} path must name a file"}
+        key = str(dest.relative_to(project_root.resolve()))
+        if key in seen:
+            return {"ok": False, "error": f"duplicate file path: {key}"}
+        seen.add(key)
+        encoded_len = len(content.encode("utf-8"))
+        total_bytes += encoded_len
+        if encoded_len > MAX_READ_BYTES:
+            return {
+                "ok": False,
+                "error": f"{key} is {encoded_len} bytes (limit {MAX_READ_BYTES})",
+            }
+        if total_bytes > 1_000_000:
+            return {"ok": False, "error": "total file content exceeds 1 MB"}
+        if dest.exists() and not overwrite:
+            return {"ok": False, "error": f"{key} already exists; set overwrite=true to replace it"}
+        planned.append((dest, content))
+
+    project_root.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
+    for dest, content in planned:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+        rel = str(dest.relative_to(root_resolved))
+        on_change(rel)
+        written.append(rel)
+
+    project_rel = str(project_root.relative_to(root_resolved))
+    return {
+        "ok": True,
+        "project_path": project_rel,
+        "files_written": written,
+        "file_count": len(written),
+        "next_steps": [
+            f"codebase-rag index {project_root}",
+            f"codebase-rag chat --root {project_root}",
+        ],
+    }
+
+
 def _clean_pattern(pattern: str) -> str:
     """Strip common wrapper noise the model emits around regex strings."""
     p = pattern.strip()
@@ -420,6 +523,59 @@ _SCHEMA_WRITE_FILE = {
     },
 }
 
+_SCHEMA_CREATE_PROJECT = {
+    "type": "function",
+    "function": {
+        "name": "create_project",
+        "description": (
+            "Create a new project directory under the session root and optionally write "
+            "starter files into it. Use this when the user asks to start or scaffold a "
+            "new project. The project_path must be relative to the current session root; "
+            "this tool cannot switch the active chat root, but it returns next commands "
+            "for indexing and chatting with the new project."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "project_path": {
+                    "type": "string",
+                    "description": "Relative directory path for the new project, e.g. 'todo-cli'.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short project summary used in the default README.",
+                },
+                "files": {
+                    "type": "array",
+                    "description": (
+                        "Optional starter files to write inside the new project. "
+                        "If omitted, README.md and .gitignore are created."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "File path relative to the new project directory.",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Complete file content.",
+                            },
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "description": "If true, replace existing files. Default false.",
+                },
+            },
+            "required": ["project_path"],
+        },
+    },
+}
+
 _SCHEMA_GREP = {
     "type": "function",
     "function": {
@@ -573,6 +729,7 @@ def tool_schemas_for(
     """
     schemas: list[dict] = [_SCHEMA_READ_FILE, _SCHEMA_GREP]
     if not read_only:
+        schemas.append(_SCHEMA_CREATE_PROJECT)
         schemas.append(_SCHEMA_WRITE_FILE)
         schemas.append(_SCHEMA_EDIT_FILE)
         if allow_shell:
@@ -603,6 +760,7 @@ def run_tool(
     web_cfg = web_config or {}
     impls = {
         "read_file": lambda: read_file(root, **args),
+        "create_project": lambda: create_project(root, on_change=on_change, **args),
         "write_file": lambda: write_file(root, on_change=on_change, **args),
         "edit_file": lambda: edit_file(root, on_change=on_change, **args),
         "grep": lambda: grep(root, **args),

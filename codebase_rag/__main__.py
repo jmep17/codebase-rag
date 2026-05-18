@@ -14,6 +14,7 @@ from pathlib import Path
 from . import audit as audit_mod
 from . import chat as chat_mod
 from . import index as index_mod
+from . import training as training_mod
 
 DEFAULT_DB = Path.home() / ".codebase-rag" / "db"
 
@@ -168,6 +169,68 @@ def main() -> None:
     )
     notes_group.add_argument("--clear", action="store_true", help="Delete the notes file.")
 
+    p_train = subparsers.add_parser(
+        "train",
+        help="Prepare local artifacts for a personalized coding assistant.",
+    )
+    p_train.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root whose notes and last conversation should shape the assistant.",
+    )
+    p_train.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Directory for generated artifacts (default: "
+            "~/.codebase-rag/meta/<project-hash>/assistant_training)."
+        ),
+    )
+    p_train.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Name for the generated Ollama model (default: <project>-assistant).",
+    )
+    p_train.add_argument(
+        "--base-model",
+        type=str,
+        default=None,
+        help="Ollama model to use in the generated Modelfile (default: chat model default).",
+    )
+    p_train.add_argument(
+        "--profile",
+        type=str,
+        default="",
+        help="Extra personal instructions to bake into the assistant. Use '-' to read stdin.",
+    )
+    p_train.add_argument(
+        "--profile-file",
+        type=Path,
+        default=None,
+        help="Read extra personal instructions from a local file.",
+    )
+    p_train.add_argument(
+        "--no-conversation",
+        dest="include_conversation",
+        action="store_false",
+        default=True,
+        help="Do not export examples from the last saved conversation.",
+    )
+    p_train.add_argument(
+        "--max-examples",
+        type=int,
+        default=200,
+        help="Maximum assistant-response examples to export from the last conversation.",
+    )
+    p_train.add_argument(
+        "--create",
+        action="store_true",
+        help="After writing artifacts, run `ollama create <name> -f Modelfile` locally.",
+    )
+
     p_addref = subparsers.add_parser(
         "add-reference",
         help="Index an external directory as reference material for a project.",
@@ -291,8 +354,9 @@ def main() -> None:
         "--read-only",
         action="store_true",
         help=(
-            "Disable file-modifying tools for this session. write_file, edit_file, "
-            "and run_shell are not exposed to the model — only read_file and grep. "
+            "Disable file-modifying tools for this session. create_project, "
+            "write_file, edit_file, and run_shell are not exposed to the model — "
+            "only read_file and grep. "
             "Useful for exploratory Q&A chats and as a guardrail against prompt injection."
         ),
     )
@@ -342,7 +406,8 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Prompt before every model-driven write_file or edit_file (default: on). "
+            "Prompt before every model-driven create_project, write_file, or edit_file "
+            "(default: on). "
             "Shows a preview (truncated diff for edits, first 15 lines for writes); "
             "'d' or 'f' reveal the full version. Use --no-confirm-writes to restore "
             "the old auto-apply behavior."
@@ -513,8 +578,8 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Prompt before every model-driven write_file or edit_file in WS sessions "
-            "(default: on). Use --no-confirm-writes to auto-apply writes/edits."
+            "Prompt before every model-driven create_project, write_file, or edit_file "
+            "in WS sessions (default: on). Use --no-confirm-writes to auto-apply them."
         ),
     )
     p_serve.add_argument("--allow-web", action="store_true")
@@ -567,6 +632,8 @@ def main() -> None:
         index_mod.show_file(args.db, args.file, root=args.root.resolve())
     elif args.command == "notes":
         _handle_notes(args)
+    elif args.command == "train":
+        _handle_train(args)
     elif args.command == "add-reference":
         if not args.source.exists():
             print(f"Reference source does not exist: {args.source}", file=sys.stderr)
@@ -948,6 +1015,54 @@ def _handle_notes(args: argparse.Namespace) -> None:
         print(f"File would be: {index_mod.project_meta_dir(root) / 'notes.md'}")
         return
     print(existing.rstrip("\n"))
+
+
+def _handle_train(args: argparse.Namespace) -> None:
+    if not args.root.exists():
+        print(f"Project root does not exist: {args.root}", file=sys.stderr)
+        sys.exit(1)
+    if args.max_examples < 0:
+        print("error: --max-examples must be >= 0", file=sys.stderr)
+        sys.exit(1)
+
+    profile_parts: list[str] = []
+    if args.profile_file is not None:
+        if not args.profile_file.is_file():
+            print(f"Profile file does not exist: {args.profile_file}", file=sys.stderr)
+            sys.exit(1)
+        profile_parts.append(args.profile_file.read_text(encoding="utf-8", errors="replace"))
+    if args.profile:
+        profile_parts.append(sys.stdin.read() if args.profile == "-" else args.profile)
+
+    try:
+        artifacts = training_mod.build_artifacts(
+            args.root.resolve(),
+            output_dir=args.output,
+            model_name=args.name,
+            base_model=args.base_model,
+            profile="\n\n".join(p.strip() for p in profile_parts if p.strip()),
+            include_conversation=args.include_conversation,
+            max_examples=args.max_examples,
+            create=args.create,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"error: ollama create failed with exit code {e.returncode}", file=sys.stderr)
+        sys.exit(e.returncode or 1)
+    except FileNotFoundError:
+        print("error: ollama executable not found on PATH", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Wrote assistant artifacts to {artifacts.output_dir}")
+    print(f"  Modelfile:     {artifacts.modelfile_path}")
+    print(f"  training data: {artifacts.records_path} ({artifacts.examples} example(s))")
+    print(f"  metadata:      {artifacts.metadata_path}")
+    if artifacts.created_model:
+        print(f"Created Ollama model: {artifacts.model_name}")
+    else:
+        print(f"Create model:   ollama create {artifacts.model_name} -f {artifacts.modelfile_path}")
+    print(
+        f"Use model:      codebase-rag chat --root {args.root.resolve()} --model {artifacts.model_name}"
+    )
 
 
 if __name__ == "__main__":
