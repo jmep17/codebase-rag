@@ -9,8 +9,8 @@ import re
 import shlex
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .index import _find_nested_repos, _load_ignore_file, iter_source_files
 
@@ -168,9 +168,7 @@ def grep(
     }
     if truncated:
         result["truncated"] = True
-        result["note"] = (
-            f"hit {GREP_MAX_RESULTS}-match cap; narrow the pattern or pass file_glob"
-        )
+        result["note"] = f"hit {GREP_MAX_RESULTS}-match cap; narrow the pattern or pass file_glob"
     return result
 
 
@@ -186,7 +184,9 @@ def _cap_output(text: str) -> tuple[str, bool]:
     return text, False
 
 
-def _run_subprocess(argv: list[str], *, cwd: str | None, env: dict | None, timeout: float, command: str, runner: str) -> dict:
+def _run_subprocess(
+    argv: list[str], *, cwd: str | None, env: dict | None, timeout: float, command: str, runner: str
+) -> dict:
     """Shared subprocess runner used by both host and Docker shell modes."""
     t0 = time.time()
     try:
@@ -238,17 +238,27 @@ def _docker_argv(root: Path, image: str, network: str, inner_argv: list[str]) ->
     uid = os.getuid()
     gid = os.getgid()
     return [
-        "docker", "run", "--rm",
+        "docker",
+        "run",
+        "--rm",
         f"--network={network}",
-        "-v", f"{root.resolve()}:/work:rw",
-        "-w", "/work",
-        "--user", f"{uid}:{gid}",
-        "--memory", "1g",
-        "--cpus", "1",
+        "-v",
+        f"{root.resolve()}:/work:rw",
+        "-w",
+        "/work",
+        "--user",
+        f"{uid}:{gid}",
+        "--memory",
+        "1g",
+        "--cpus",
+        "1",
         "--read-only",
-        "--tmpfs", "/tmp:size=64m",
-        "-e", "HOME=/tmp",
-        "-e", "LANG=C.UTF-8",
+        "--tmpfs",
+        "/tmp:size=64m",
+        "-e",
+        "HOME=/tmp",
+        "-e",
+        "LANG=C.UTF-8",
         image,
         *inner_argv,
     ]
@@ -278,7 +288,12 @@ def run_shell(
     try:
         argv = shlex.split(command)
     except ValueError as e:
-        return {"ok": False, "error": f"could not parse command: {e}", "command": command, "runner": runner}
+        return {
+            "ok": False,
+            "error": f"could not parse command: {e}",
+            "command": command,
+            "runner": runner,
+        }
     if not argv:
         return {"ok": False, "error": "empty command", "command": command, "runner": runner}
 
@@ -293,13 +308,21 @@ def run_shell(
         )
 
     if runner.startswith("docker:"):
-        image = runner[len("docker:"):].strip()
+        image = runner[len("docker:") :].strip()
         if not image:
-            return {"ok": False, "error": "docker runner missing image (use --shell-runner docker:<image>)",
-                    "command": command, "runner": runner}
+            return {
+                "ok": False,
+                "error": "docker runner missing image (use --shell-runner docker:<image>)",
+                "command": command,
+                "runner": runner,
+            }
         if shell_network not in {"none", "bridge", "host"}:
-            return {"ok": False, "error": f"invalid shell_network {shell_network!r}; use none|bridge|host",
-                    "command": command, "runner": runner}
+            return {
+                "ok": False,
+                "error": f"invalid shell_network {shell_network!r}; use none|bridge|host",
+                "command": command,
+                "runner": runner,
+            }
         docker_argv = _docker_argv(root, image, shell_network, argv)
         # Host env is irrelevant — container has its own minimal env via the
         # -e flags above. We pass env=None so subprocess inherits this
@@ -314,8 +337,12 @@ def run_shell(
             runner=runner,
         )
 
-    return {"ok": False, "error": f"unknown runner {runner!r}; use 'host' or 'docker:<image>'",
-            "command": command, "runner": runner}
+    return {
+        "ok": False,
+        "error": f"unknown runner {runner!r}; use 'host' or 'docker:<image>'",
+        "command": command,
+        "runner": runner,
+    }
 
 
 def edit_file(
@@ -411,7 +438,7 @@ _SCHEMA_GREP = {
                 "pattern": {
                     "type": "string",
                     "description": (
-                        "What to search for. Just the pattern — do not wrap in r\"...\" "
+                        'What to search for. Just the pattern — do not wrap in r"..." '
                         "or quotes. Regex examples (literal=false): 'useEffect', "
                         "'fetch|axios', 'use[A-Z]\\w+'. For plain-text searches "
                         "(literal=true): 'api/v1/users', '@deprecated'."
@@ -535,7 +562,9 @@ _SCHEMA_RUN_SHELL = {
 }
 
 
-def tool_schemas_for(*, read_only: bool = False, allow_shell: bool = False, allow_web: bool = False) -> list[dict]:
+def tool_schemas_for(
+    *, read_only: bool = False, allow_shell: bool = False, allow_web: bool = False
+) -> list[dict]:
     """Assemble the list of tool schemas exposed to the model for this session.
 
     - read_only=True: only read_file, grep, and (if allow_web) web tools are exposed.
@@ -570,6 +599,7 @@ def run_tool(
     web_config: dict | None = None,
 ) -> str:
     from . import web as web_mod
+
     web_cfg = web_config or {}
     impls = {
         "read_file": lambda: read_file(root, **args),
@@ -577,8 +607,11 @@ def run_tool(
         "edit_file": lambda: edit_file(root, on_change=on_change, **args),
         "grep": lambda: grep(root, **args),
         "run_shell": lambda: run_shell(
-            root, timeout=shell_timeout, runner=shell_runner,
-            shell_network=shell_network, **args,
+            root,
+            timeout=shell_timeout,
+            runner=shell_runner,
+            shell_network=shell_network,
+            **args,
         ),
         "web_search": lambda: web_mod.web_search(
             searxng_url=web_cfg.get("searxng_url", ""),

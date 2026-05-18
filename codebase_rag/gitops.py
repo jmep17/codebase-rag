@@ -8,8 +8,8 @@ recent agent commit deterministically and revert it.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 COMMIT_TAG = "[codebase-rag]"
 
@@ -82,7 +82,8 @@ def commit_pending(root: Path, message: str, *, paths: Sequence[str] | None = No
     sha = _run_git(root, "rev-parse", "HEAD").stdout.strip()
     files = (
         _run_git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
-        .stdout.strip().splitlines()
+        .stdout.strip()
+        .splitlines()
     )
     return {"ok": True, "sha": sha, "short": sha[:12], "message": msg, "files": files}
 
@@ -98,7 +99,8 @@ def last_codebase_rag_commit(root: Path) -> dict | None:
     sha, subject = lines[0], lines[1]
     files = (
         _run_git(root, "diff-tree", "--no-commit-id", "--name-only", "-r", sha)
-        .stdout.strip().splitlines()
+        .stdout.strip()
+        .splitlines()
     )
     return {"sha": sha, "short": sha[:12], "subject": subject, "files": files}
 

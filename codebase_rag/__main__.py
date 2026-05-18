@@ -91,7 +91,8 @@ def main() -> None:
     )
 
     p_search = subparsers.add_parser(
-        "search", help="Run a one-shot semantic search within a project (default: current directory)."
+        "search",
+        help="Run a one-shot semantic search within a project (default: current directory).",
     )
     p_search.add_argument("query", type=str, help="Search query.")
     p_search.add_argument(
@@ -124,7 +125,9 @@ def main() -> None:
         "show",
         help="Print every indexed chunk for files matching a path glob within a project.",
     )
-    p_show.add_argument("file", type=str, metavar="GLOB", help="Path glob, e.g. 'src/auth.py' or 'src/*.py'.")
+    p_show.add_argument(
+        "file", type=str, metavar="GLOB", help="Path glob, e.g. 'src/auth.py' or 'src/*.py'."
+    )
     p_show.add_argument(
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
     )
@@ -146,13 +149,21 @@ def main() -> None:
         help="Project root these notes belong to (default: current working directory).",
     )
     notes_group = p_notes.add_mutually_exclusive_group()
-    notes_group.add_argument("--edit", action="store_true", help="Open notes in $EDITOR (default vi).")
     notes_group.add_argument(
-        "--set", dest="set_text", type=str, metavar="TEXT",
+        "--edit", action="store_true", help="Open notes in $EDITOR (default vi)."
+    )
+    notes_group.add_argument(
+        "--set",
+        dest="set_text",
+        type=str,
+        metavar="TEXT",
         help="Replace notes with this text. Use '-' to read from stdin.",
     )
     notes_group.add_argument(
-        "--append", dest="append_text", type=str, metavar="TEXT",
+        "--append",
+        dest="append_text",
+        type=str,
+        metavar="TEXT",
         help="Append a line of text to notes. Use '-' to read from stdin.",
     )
     notes_group.add_argument("--clear", action="store_true", help="Delete the notes file.")
@@ -178,7 +189,11 @@ def main() -> None:
         "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
     )
     p_addref.add_argument(
-        "--exclude", "-x", action="append", default=[], metavar="GLOB",
+        "--exclude",
+        "-x",
+        action="append",
+        default=[],
+        metavar="GLOB",
         help="Glob pattern to exclude inside the reference source. Repeatable.",
     )
 
@@ -187,14 +202,32 @@ def main() -> None:
         help="Show the per-project audit log of tool calls and slash commands.",
     )
     p_audit.add_argument(
-        "--root", type=Path, default=Path.cwd(),
+        "--root",
+        type=Path,
+        default=Path.cwd(),
         help="Project root whose audit log to show (default: current working directory).",
     )
-    p_audit.add_argument("--tool", type=str, default=None, help="Filter by tool name (e.g. grep, edit_file).")
-    p_audit.add_argument("--event", type=str, default=None, help="Filter by event type (tool_call, tool_result, slash_command, session_start, session_end).")
-    p_audit.add_argument("--since", type=str, default=None, help="e.g. 'today', 'yesterday', '15m', '2h', '7d', or ISO date.")
-    p_audit.add_argument("--limit", type=int, default=50, help="Max number of events to show (default: 50). 0 = all.")
-    p_audit.add_argument("--pretty", action="store_true", help="Pretty-print each entry over multiple lines.")
+    p_audit.add_argument(
+        "--tool", type=str, default=None, help="Filter by tool name (e.g. grep, edit_file)."
+    )
+    p_audit.add_argument(
+        "--event",
+        type=str,
+        default=None,
+        help="Filter by event type (tool_call, tool_result, slash_command, session_start, session_end).",
+    )
+    p_audit.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="e.g. 'today', 'yesterday', '15m', '2h', '7d', or ISO date.",
+    )
+    p_audit.add_argument(
+        "--limit", type=int, default=50, help="Max number of events to show (default: 50). 0 = all."
+    )
+    p_audit.add_argument(
+        "--pretty", action="store_true", help="Pretty-print each entry over multiple lines."
+    )
 
     p_rmref = subparsers.add_parser(
         "remove-reference",
@@ -395,18 +428,25 @@ def main() -> None:
         help="Bind port (default: 8723; env: CODEBASE_RAG_SERVE_PORT).",
     )
     p_serve.add_argument(
-        "--db", type=Path, default=DEFAULT_DB,
+        "--db",
+        type=Path,
+        default=DEFAULT_DB,
         help=f"Database path (default: {DEFAULT_DB}).",
     )
     p_serve.add_argument(
-        "--root", type=Path, default=Path.cwd(),
+        "--root",
+        type=Path,
+        default=Path.cwd(),
         help=(
             "Default project root for chat sessions when the WS client "
             "doesn't pick one (default: current working directory)."
         ),
     )
     p_serve.add_argument(
-        "--static", type=Path, default=None, metavar="DIR",
+        "--static",
+        type=Path,
+        default=None,
+        metavar="DIR",
         help=(
             "Serve a built SPA bundle at /. Typically web/dist after `pnpm build`. "
             "Static assets are anonymously readable; the SPA must include "
@@ -414,40 +454,57 @@ def main() -> None:
         ),
     )
     p_serve.add_argument(
-        "--reuse-token", action="store_true",
+        "--reuse-token",
+        action="store_true",
         help=(
             "Keep the existing serve.token instead of rotating on every start. "
             "Useful for desktop wrappers that respawn the sidecar."
         ),
     )
     p_serve.add_argument(
-        "--token-file", type=Path, default=None, metavar="PATH",
+        "--token-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
         help="Override token file location (default: <meta-dir>/serve.token).",
     )
     p_serve.add_argument(
-        "--quiet", action="store_true",
+        "--quiet",
+        action="store_true",
         help="Suppress uvicorn access logs.",
     )
     p_serve.add_argument(
-        "--model", type=str, default=None,
+        "--model",
+        type=str,
+        default=None,
         help="Chat model for WS sessions (default: env CODEBASE_RAG_CHAT_MODEL or mistral-nemo).",
     )
     p_serve.add_argument(
-        "--provider", type=str, default="ollama",
+        "--provider",
+        type=str,
+        default="ollama",
         choices=["ollama", "anthropic"],
         help="Chat provider for WS sessions (default: ollama).",
     )
     p_serve.add_argument(
-        "--architect-model", type=str, default=None, metavar="MODEL",
+        "--architect-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
         help="Optional architect model (split architect/coder flow).",
     )
     p_serve.add_argument("--read-only", action="store_true")
     p_serve.add_argument("--allow-shell", action="store_true")
     p_serve.add_argument(
-        "--shell-runner", type=str, default="host", metavar="host|docker:IMAGE",
+        "--shell-runner",
+        type=str,
+        default="host",
+        metavar="host|docker:IMAGE",
     )
     p_serve.add_argument(
-        "--shell-network", type=str, default="none",
+        "--shell-network",
+        type=str,
+        default="none",
         choices=["none", "bridge", "host"],
     )
     p_serve.add_argument("--shell-timeout", type=float, default=30.0)
@@ -462,10 +519,16 @@ def main() -> None:
     )
     p_serve.add_argument("--allow-web", action="store_true")
     p_serve.add_argument(
-        "--web-allow", action="append", default=[], metavar="HOST_GLOB",
+        "--web-allow",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
     )
     p_serve.add_argument(
-        "--web-block", action="append", default=[], metavar="HOST_GLOB",
+        "--web-block",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
     )
 
     args = parser.parse_args()
@@ -623,8 +686,7 @@ def main() -> None:
             sys.exit(1)
         if not args.db.exists():
             print(
-                f"No index found at {args.db}. "
-                f"Run `codebase-rag index <path>` first.",
+                f"No index found at {args.db}. Run `codebase-rag index <path>` first.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -719,7 +781,7 @@ def _handle_doctor(args: argparse.Namespace) -> None:
     root = args.root.resolve()
     chat_model = chat_mod._resolve_model(args.model)
 
-    print(f"codebase-rag doctor")
+    print("codebase-rag doctor")
     print(f"Project: {root}")
     print(f"Database: {args.db}")
     print()
@@ -735,7 +797,8 @@ def _handle_doctor(args: argparse.Namespace) -> None:
             import chromadb
 
             client = chromadb.PersistentClient(
-                path=str(args.db), settings=index_mod.CHROMA_SETTINGS,
+                path=str(args.db),
+                settings=index_mod.CHROMA_SETTINGS,
             )
             collection_name = index_mod.collection_name_for(root)
             collections = client.list_collections()

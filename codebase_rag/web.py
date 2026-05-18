@@ -13,8 +13,8 @@ import hashlib
 import json
 import time
 import urllib.parse
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 MAX_FETCH_CHARS = 50_000
 FETCH_TIMEOUT = 10.0
@@ -89,6 +89,7 @@ def web_search(
     except WebToolsUnavailable as e:
         return {"ok": False, "error": str(e)}
     import httpx
+
     from .tools import wrap_untrusted
 
     endpoint = searxng_url.rstrip("/") + "/search"
@@ -113,12 +114,16 @@ def web_search(
     raw_results = data.get("results") or []
     trimmed = []
     for r in raw_results[:top_k]:
-        trimmed.append({
-            "title": (r.get("title") or "").strip(),
-            "url": r.get("url") or "",
-            "snippet": wrap_untrusted((r.get("content") or "").strip()) if r.get("content") else "",
-            "engine": r.get("engine") or "",
-        })
+        trimmed.append(
+            {
+                "title": (r.get("title") or "").strip(),
+                "url": r.get("url") or "",
+                "snippet": wrap_untrusted((r.get("content") or "").strip())
+                if r.get("content")
+                else "",
+                "engine": r.get("engine") or "",
+            }
+        )
     return {
         "ok": True,
         "query": query,
@@ -148,6 +153,7 @@ def web_fetch(
         return {"ok": False, "error": str(e), "url": url}
     import httpx
     import trafilatura
+
     from .tools import wrap_untrusted
 
     # Cache lookup
@@ -219,13 +225,15 @@ def web_fetch(
         try:
             cache_dir.mkdir(parents=True, exist_ok=True)
             cpath.write_text(
-                json.dumps({
-                    "url": str(resp.url),
-                    "title": title,
-                    "content": text,
-                    "status": resp.status_code,
-                    "ts": time.time(),
-                }),
+                json.dumps(
+                    {
+                        "url": str(resp.url),
+                        "title": title,
+                        "content": text,
+                        "status": resp.status_code,
+                        "ts": time.time(),
+                    }
+                ),
                 encoding="utf-8",
             )
         except OSError:

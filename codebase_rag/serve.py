@@ -88,7 +88,8 @@ def _resolve_project(db_path: Path, slug: str) -> tuple[Path, str] | None:
         return None
     try:
         client = chromadb.PersistentClient(
-            path=str(db_path), settings=index_mod.CHROMA_SETTINGS,
+            path=str(db_path),
+            settings=index_mod.CHROMA_SETTINGS,
         )
     except Exception:
         return None
@@ -136,7 +137,8 @@ def _list_projects(db_path: Path) -> list[dict]:
         return []
     try:
         client = chromadb.PersistentClient(
-            path=str(db_path), settings=index_mod.CHROMA_SETTINGS,
+            path=str(db_path),
+            settings=index_mod.CHROMA_SETTINGS,
         )
     except Exception:
         return []
@@ -164,10 +166,18 @@ def _list_sessions(meta_dir: Path) -> list[dict]:
         if not sid:
             continue
         ev = row.get("event")
-        bucket = by_session.setdefault(sid, {
-            "session_id": sid, "started_at": None, "ended_at": None,
-            "model": None, "provider": None, "events": 0, "tool_calls": 0,
-        })
+        bucket = by_session.setdefault(
+            sid,
+            {
+                "session_id": sid,
+                "started_at": None,
+                "ended_at": None,
+                "model": None,
+                "provider": None,
+                "events": 0,
+                "tool_calls": 0,
+            },
+        )
         bucket["events"] += 1
         if ev == "tool_call":
             bucket["tool_calls"] += 1
@@ -237,8 +247,9 @@ def _safe_tool_calls(tool_calls: list) -> list:
     return out
 
 
-def _serialize_event(event: tuple, session: chat_mod.ChatSession,
-                     turn_id: str, call_counter: list[int]) -> dict:
+def _serialize_event(
+    event: tuple, session: chat_mod.ChatSession, turn_id: str, call_counter: list[int]
+) -> dict:
     """Translate one agent_turn event into a JSON envelope.
 
     call_counter is a single-element mutable list; tool_call_request
@@ -248,8 +259,13 @@ def _serialize_event(event: tuple, session: chat_mod.ChatSession,
     kind = event[0]
     if kind == "retrieved":
         _, chunks, pinned, elapsed = event
-        return {"type": "retrieved", "turn": turn_id,
-                "chunks": chunks, "pinned": pinned, "elapsed": elapsed}
+        return {
+            "type": "retrieved",
+            "turn": turn_id,
+            "chunks": chunks,
+            "pinned": pinned,
+            "elapsed": elapsed,
+        }
     if kind == "architect_start":
         return {"type": "architect_start", "turn": turn_id, "model": event[1]}
     if kind == "architect_error":
@@ -258,9 +274,14 @@ def _serialize_event(event: tuple, session: chat_mod.ChatSession,
         return {"type": "token", "turn": turn_id, "piece": event[1]}
     if kind == "inference_done":
         _, content, tool_calls, stats = event
-        return {"type": "inference_done", "turn": turn_id,
-                "content": content, "tool_calls": _safe_tool_calls(tool_calls),
-                "stats": stats, "provider": session.provider_name}
+        return {
+            "type": "inference_done",
+            "turn": turn_id,
+            "content": content,
+            "tool_calls": _safe_tool_calls(tool_calls),
+            "stats": stats,
+            "provider": session.provider_name,
+        }
     if kind == "error":
         _, sub, msg = event
         return {"type": "error", "turn": turn_id, "subtype": sub, "message": msg}
@@ -269,26 +290,46 @@ def _serialize_event(event: tuple, session: chat_mod.ChatSession,
     if kind == "tool_call_request":
         _, tname, args = event
         call_counter[0] += 1
-        return {"type": "tool_call_request", "turn": turn_id,
-                "call": f"{turn_id}:{call_counter[0]}",
-                "tool": tname, "args": args}
+        return {
+            "type": "tool_call_request",
+            "turn": turn_id,
+            "call": f"{turn_id}:{call_counter[0]}",
+            "tool": tname,
+            "args": args,
+        }
     if kind == "confirm":
         _, tname, args = event
-        return {"type": "confirm", "turn": turn_id,
-                "call": f"{turn_id}:{call_counter[0]}",
-                "tool": tname, "args": args,
-                "preview": _make_confirm_preview(tname, args, session)}
+        return {
+            "type": "confirm",
+            "turn": turn_id,
+            "call": f"{turn_id}:{call_counter[0]}",
+            "tool": tname,
+            "args": args,
+            "preview": _make_confirm_preview(tname, args, session),
+        }
     if kind == "tool_declined":
         _, tname, args, declined, raw = event
-        return {"type": "tool_declined", "turn": turn_id,
-                "call": f"{turn_id}:{call_counter[0]}",
-                "tool": tname, "args": args, "declined": declined, "raw": raw}
+        return {
+            "type": "tool_declined",
+            "turn": turn_id,
+            "call": f"{turn_id}:{call_counter[0]}",
+            "tool": tname,
+            "args": args,
+            "declined": declined,
+            "raw": raw,
+        }
     if kind == "tool_result":
         _, tname, args, raw, summary, elapsed = event
-        return {"type": "tool_result", "turn": turn_id,
-                "call": f"{turn_id}:{call_counter[0]}",
-                "tool": tname, "args": args, "raw": raw,
-                "summary": summary, "elapsed": elapsed}
+        return {
+            "type": "tool_result",
+            "turn": turn_id,
+            "call": f"{turn_id}:{call_counter[0]}",
+            "tool": tname,
+            "args": args,
+            "raw": raw,
+            "summary": summary,
+            "elapsed": elapsed,
+        }
     if kind == "max_turns":
         return {"type": "max_turns", "turn": turn_id, "max_turns": event[1]}
     if kind == "turn_done":
@@ -342,8 +383,7 @@ def create_app(
                 return await call_next(request)
             auth = request.headers.get("authorization", "")
             if not auth.lower().startswith("bearer "):
-                return JSONResponse({"error": "missing bearer token"},
-                                    status_code=401)
+                return JSONResponse({"error": "missing bearer token"}, status_code=401)
             presented = auth[7:].strip().encode("utf-8")
             if not secrets.compare_digest(presented, expected_token):
                 return JSONResponse({"error": "invalid token"}, status_code=401)
@@ -352,11 +392,15 @@ def create_app(
     # ----- HTTP handlers -----
 
     async def health(request):
-        return JSONResponse({
-            "ok": True, "version": _VERSION,
-            "providers": ["ollama", "anthropic"],
-            "pid": os.getpid(), "started_at": _STARTED_AT_ISO,
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "version": _VERSION,
+                "providers": ["ollama", "anthropic"],
+                "pid": os.getpid(),
+                "started_at": _STARTED_AT_ISO,
+            }
+        )
 
     async def list_projects(request):
         projects = await asyncio.to_thread(_list_projects, db_path)
@@ -371,7 +415,8 @@ def create_app(
 
         def _detail():
             client = chromadb.PersistentClient(
-                path=str(db_path), settings=index_mod.CHROMA_SETTINGS,
+                path=str(db_path),
+                settings=index_mod.CHROMA_SETTINGS,
             )
             col = client.get_collection(col_name)
             item = _project_summary(col, root, with_notes=True)
@@ -388,7 +433,8 @@ def create_app(
             return JSONResponse({"error": "not found"}, status_code=404)
         root, _ = resolved
         sessions = await asyncio.to_thread(
-            _list_sessions, index_mod.project_meta_dir(root),
+            _list_sessions,
+            index_mod.project_meta_dir(root),
         )
         return JSONResponse({"sessions": sessions})
 
@@ -410,9 +456,12 @@ def create_app(
         except ValueError:
             limit = 50
         events = await asyncio.to_thread(
-            audit_mod.tail_audit, index_mod.project_meta_dir(root),
-            since=since, tool=request.query_params.get("tool"),
-            event=request.query_params.get("event"), limit=limit,
+            audit_mod.tail_audit,
+            index_mod.project_meta_dir(root),
+            since=since,
+            tool=request.query_params.get("tool"),
+            event=request.query_params.get("event"),
+            limit=limit,
         )
         return JSONResponse({"events": events})
 
@@ -431,8 +480,12 @@ def create_app(
             return JSONResponse({"error": "project not found"}, status_code=404)
         root, _ = resolved
         hits = await asyncio.to_thread(
-            index_mod._search_hits, db_path, q, root,
-            top_k=k, file_pattern=file_glob,
+            index_mod._search_hits,
+            db_path,
+            q,
+            root,
+            top_k=k,
+            file_pattern=file_glob,
         )
         return JSONResponse({"hits": hits})
 
@@ -458,14 +511,18 @@ def create_app(
                 status_code=413,
             )
         content = await asyncio.to_thread(
-            full.read_text, "utf-8", "replace",
+            full.read_text,
+            "utf-8",
+            "replace",
         )
-        return JSONResponse({
-            "path": str(full.relative_to(root.resolve())),
-            "content": content,
-            "bytes": size,
-            "lines": content.count("\n") + 1,
-        })
+        return JSONResponse(
+            {
+                "path": str(full.relative_to(root.resolve())),
+                "content": content,
+                "bytes": size,
+                "lines": content.count("\n") + 1,
+            }
+        )
 
     async def start_index(request):
         slug = request.path_params["slug"]
@@ -491,12 +548,13 @@ def create_app(
                     if reindex:
                         index_mod.reset_index(db_path, root)
                     index_mod.build_index(
-                        root, db_path,
-                        extra_excludes=exclude, on_progress=on_progress,
+                        root,
+                        db_path,
+                        extra_excludes=exclude,
+                        on_progress=on_progress,
                     )
                 except Exception as e:
-                    on_progress({"phase": "error",
-                                 "message": f"{type(e).__name__}: {e}"})
+                    on_progress({"phase": "error", "message": f"{type(e).__name__}: {e}"})
                 finally:
                     asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
@@ -528,47 +586,55 @@ def create_app(
         else:
             presented = token_q
         if not presented or not secrets.compare_digest(
-            presented.encode("utf-8"), expected_token,
+            presented.encode("utf-8"),
+            expected_token,
         ):
             await websocket.close(code=WS_CLOSE_AUTH, reason="auth failed")
             return
 
         slug = websocket.query_params.get("project", "")
-        resolved = (
-            await asyncio.to_thread(_resolve_project, db_path, slug)
-            if slug else None
-        )
+        resolved = await asyncio.to_thread(_resolve_project, db_path, slug) if slug else None
         if resolved is None and default_root is not None:
             resolved = (default_root, "")
         if resolved is None:
             await websocket.accept()
-            await websocket.send_json({
-                "type": "error", "subtype": "no_project",
-                "message": (
-                    f"project {slug!r} not found and no default --root configured"
-                ),
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "subtype": "no_project",
+                    "message": (f"project {slug!r} not found and no default --root configured"),
+                }
+            )
             await websocket.close(code=WS_CLOSE_NOT_FOUND, reason="no project")
             return
         root, _ = resolved
         if not db_path.exists():
             await websocket.accept()
-            await websocket.send_json({
-                "type": "error", "subtype": "no_index",
-                "message": f"no index at {db_path}; run `codebase-rag index .` first",
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "subtype": "no_index",
+                    "message": f"no index at {db_path}; run `codebase-rag index .` first",
+                }
+            )
             await websocket.close(code=WS_CLOSE_INIT_FAILED, reason="no index")
             return
 
         session = await asyncio.to_thread(
-            chat_mod.init_chat_session, db_path, root, **chat_defaults,
+            chat_mod.init_chat_session,
+            db_path,
+            root,
+            **chat_defaults,
         )
         if session is None:
             await websocket.accept()
-            await websocket.send_json({
-                "type": "error", "subtype": "init_failed",
-                "message": "could not init chat session (provider down? no index?)",
-            })
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "subtype": "init_failed",
+                    "message": "could not init chat session (provider down? no index?)",
+                }
+            )
             await websocket.close(code=WS_CLOSE_INIT_FAILED, reason="init failed")
             return
 
@@ -586,35 +652,44 @@ def create_app(
             except RuntimeError:
                 pass
 
-        session.on_change_error = lambda p, e: _post({
-            "type": "warn", "message": f"reindex failed for {p}: {e}",
-        })
+        session.on_change_error = lambda p, e: _post(
+            {
+                "type": "warn",
+                "message": f"reindex failed for {p}: {e}",
+            }
+        )
 
-        await websocket.send_json({
-            "type": "hello",
-            "session_id": session.session,
-            "root": str(session.root),
-            "model": session.chat_model,
-            "provider": session.provider_name,
-            "collection": session.collection.name,
-            "capabilities": {
-                "confirm_writes": session.confirm_writes,
-                "read_only": session.read_only,
-                "allow_shell": session.allow_shell,
-                "allow_web": session.allow_web,
-                "architect_model": session.architect_model,
-                "shell_runner": session.shell_runner,
-                "shell_network": session.shell_network,
-                "shell_timeout": session.shell_timeout,
-            },
-            "slash_specs": [
-                {"name": s.name, "desc": s.desc, "requires": s.requires,
-                 "takes_arg": s.takes_arg}
-                for s in chat_mod.SLASH_SPECS
-            ],
-            "pinned": list(session.pinned_paths),
-            "history_len": len(session.history),
-        })
+        await websocket.send_json(
+            {
+                "type": "hello",
+                "session_id": session.session,
+                "root": str(session.root),
+                "model": session.chat_model,
+                "provider": session.provider_name,
+                "collection": session.collection.name,
+                "capabilities": {
+                    "confirm_writes": session.confirm_writes,
+                    "read_only": session.read_only,
+                    "allow_shell": session.allow_shell,
+                    "allow_web": session.allow_web,
+                    "architect_model": session.architect_model,
+                    "shell_runner": session.shell_runner,
+                    "shell_network": session.shell_network,
+                    "shell_timeout": session.shell_timeout,
+                },
+                "slash_specs": [
+                    {
+                        "name": s.name,
+                        "desc": s.desc,
+                        "requires": s.requires,
+                        "takes_arg": s.takes_arg,
+                    }
+                    for s in chat_mod.SLASH_SPECS
+                ],
+                "pinned": list(session.pinned_paths),
+                "history_len": len(session.history),
+            }
+        )
 
         async def sender():
             while True:
@@ -632,16 +707,17 @@ def create_app(
             def confirm(prompt: str) -> bool:
                 try:
                     asyncio.run_coroutine_threadsafe(
-                        outbox.put({"type": "slash_confirm_prompt",
-                                    "prompt": prompt}),
+                        outbox.put({"type": "slash_confirm_prompt", "prompt": prompt}),
                         loop,
                     ).result()
                     reply = asyncio.run_coroutine_threadsafe(
-                        confirm_inbox.get(), loop,
+                        confirm_inbox.get(),
+                        loop,
                     ).result()
                 except Exception:
                     return False
                 return bool(reply and reply.get("approved"))
+
             return confirm
 
         async def drive_turn(text: str, verbose: bool):
@@ -654,18 +730,23 @@ def create_app(
                     event = next(gen, None)
                     while event is not None:
                         env = _serialize_event(
-                            event, session, turn_id, call_counter,
+                            event,
+                            session,
+                            turn_id,
+                            call_counter,
                         )
                         try:
                             asyncio.run_coroutine_threadsafe(
-                                outbox.put(env), loop,
+                                outbox.put(env),
+                                loop,
                             ).result()
                         except Exception:
                             return
                         if event[0] == "confirm":
                             try:
                                 reply = asyncio.run_coroutine_threadsafe(
-                                    confirm_inbox.get(), loop,
+                                    confirm_inbox.get(),
+                                    loop,
                                 ).result()
                             except Exception:
                                 reply = None
@@ -688,8 +769,10 @@ def create_app(
             try:
                 await asyncio.to_thread(
                     chat_mod._save_conversation,
-                    session.root, session.history,
-                    session.chat_model, session.pinned_paths,
+                    session.root,
+                    session.history,
+                    session.chat_model,
+                    session.pinned_paths,
                 )
             except OSError:
                 pass
@@ -697,24 +780,29 @@ def create_app(
         async def run_slash(line: str) -> bool:
             """Dispatch a slash command. Returns True if the session should exit."""
             dispatch = await asyncio.to_thread(
-                chat_mod.dispatch_slash, session, line,
+                chat_mod.dispatch_slash,
+                session,
+                line,
                 confirm=make_slash_confirm(),
             )
             if dispatch is None:
-                await outbox.put({"type": "warn",
-                                  "message": f"not a slash command: {line!r}"})
+                await outbox.put({"type": "warn", "message": f"not a slash command: {line!r}"})
                 return False
-            await outbox.put({
-                "type": "slash_output",
-                "lines": [{"level": lv, "text": tx} for lv, tx in dispatch],
-            })
+            await outbox.put(
+                {
+                    "type": "slash_output",
+                    "lines": [{"level": lv, "text": tx} for lv, tx in dispatch],
+                }
+            )
             if any(lv == "exit" for lv, _ in dispatch):
                 return True
             try:
                 await asyncio.to_thread(
                     chat_mod._save_conversation,
-                    session.root, session.history,
-                    session.chat_model, session.pinned_paths,
+                    session.root,
+                    session.history,
+                    session.chat_model,
+                    session.pinned_paths,
                 )
             except OSError:
                 pass
@@ -732,15 +820,19 @@ def create_app(
                     await websocket.close(code=1000, reason="client close")
                     break
                 if mtype == "confirm":
-                    await confirm_inbox.put({
-                        "approved": bool(msg.get("approved")),
-                        "args": msg.get("args"),
-                    })
+                    await confirm_inbox.put(
+                        {
+                            "approved": bool(msg.get("approved")),
+                            "args": msg.get("args"),
+                        }
+                    )
                     continue
                 if mtype == "slash_confirm_reply":
-                    await confirm_inbox.put({
-                        "approved": bool(msg.get("approved")),
-                    })
+                    await confirm_inbox.put(
+                        {
+                            "approved": bool(msg.get("approved")),
+                        }
+                    )
                     continue
                 if mtype == "abort":
                     # Best-effort: unblock the worker if it's at a confirm.
@@ -758,15 +850,16 @@ def create_app(
                 if mtype == "slash":
                     line = (msg.get("command") or "").strip()
                     if not line:
-                        await outbox.put({"type": "warn",
-                                          "message": "empty slash"})
+                        await outbox.put({"type": "warn", "message": "empty slash"})
                         continue
                     if state["turn_in_flight"]:
-                        await outbox.put({
-                            "type": "error",
-                            "subtype": "turn_in_flight",
-                            "message": "wait for the current turn",
-                        })
+                        await outbox.put(
+                            {
+                                "type": "error",
+                                "subtype": "turn_in_flight",
+                                "message": "wait for the current turn",
+                            }
+                        )
                         continue
                     if await run_slash(line):
                         await websocket.close(code=1000, reason="slash exit")
@@ -775,37 +868,42 @@ def create_app(
                 if mtype == "user_input":
                     text = (msg.get("text") or "").strip()
                     if not text:
-                        await outbox.put({"type": "warn",
-                                          "message": "empty input"})
+                        await outbox.put({"type": "warn", "message": "empty input"})
                         continue
                     if state["turn_in_flight"]:
-                        await outbox.put({
-                            "type": "error",
-                            "subtype": "turn_in_flight",
-                            "message": "a turn is already running",
-                        })
+                        await outbox.put(
+                            {
+                                "type": "error",
+                                "subtype": "turn_in_flight",
+                                "message": "a turn is already running",
+                            }
+                        )
                         continue
                     # Composer slash UX: ":add foo", "exit", "quit"
                     if text.startswith(":") or text in ("exit", "quit"):
                         dispatch = await asyncio.to_thread(
-                            chat_mod.dispatch_slash, session, text,
+                            chat_mod.dispatch_slash,
+                            session,
+                            text,
                             confirm=make_slash_confirm(),
                         )
                         if dispatch is not None:
-                            await outbox.put({
-                                "type": "slash_output",
-                                "lines": [{"level": lv, "text": tx}
-                                          for lv, tx in dispatch],
-                            })
+                            await outbox.put(
+                                {
+                                    "type": "slash_output",
+                                    "lines": [{"level": lv, "text": tx} for lv, tx in dispatch],
+                                }
+                            )
                             if any(lv == "exit" for lv, _ in dispatch):
-                                await websocket.close(code=1000,
-                                                      reason="slash exit")
+                                await websocket.close(code=1000, reason="slash exit")
                                 break
                             try:
                                 await asyncio.to_thread(
                                     chat_mod._save_conversation,
-                                    session.root, session.history,
-                                    session.chat_model, session.pinned_paths,
+                                    session.root,
+                                    session.history,
+                                    session.chat_model,
+                                    session.pinned_paths,
                                 )
                             except OSError:
                                 pass
@@ -817,15 +915,16 @@ def create_app(
                         state["turn_in_flight"] = False
                     continue
 
-                await outbox.put({"type": "warn",
-                                  "message": f"unknown type {mtype!r}"})
+                await outbox.put({"type": "warn", "message": f"unknown type {mtype!r}"})
         except WebSocketDisconnect:
             # Poison the confirm queue so a pending worker unblocks.
             confirm_inbox.put_nowait(None)
         finally:
             try:
                 audit_mod.log_event(
-                    session.meta_dir, session.session, "session_end",
+                    session.meta_dir,
+                    session.session,
+                    "session_end",
                     reason="ws_closed",
                 )
             except Exception:
@@ -851,8 +950,7 @@ def create_app(
     ]
     if static_dir is not None:
         routes.append(
-            Mount("/", StaticFiles(directory=str(static_dir), html=True),
-                  name="spa"),
+            Mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa"),
         )
 
     app = Starlette(
@@ -877,22 +975,27 @@ def create_app(
 # ---------------------------------------------------------------------------
 
 
-def _print_banner(host: str, port: int, root: Path, db_path: Path,
-                  token: str, token_path: Path,
-                  static_dir: Path | None,
-                  chat_defaults: dict[str, Any]) -> None:
+def _print_banner(
+    host: str,
+    port: int,
+    root: Path,
+    db_path: Path,
+    token: str,
+    token_path: Path,
+    static_dir: Path | None,
+    chat_defaults: dict[str, Any],
+) -> None:
     is_loopback = host in ("127.0.0.1", "localhost", "::1")
     truncated = f"{token[:8]}…{token[-4:]}" if len(token) > 14 else "***"
     provider = chat_defaults.get("provider_name") or "ollama"
     model = (
-        chat_defaults.get("model")
-        or os.environ.get("CODEBASE_RAG_CHAT_MODEL")
-        or "mistral-nemo"
+        chat_defaults.get("model") or os.environ.get("CODEBASE_RAG_CHAT_MODEL") or "mistral-nemo"
     )
     binding = f"http://{host}:{port}"
     print(f"codebase-rag serve  v{_VERSION}")
-    print(f"  bind:     {binding}    "
-          f"{'(loopback — local only)' if is_loopback else '(NON-LOOPBACK)'}")
+    print(
+        f"  bind:     {binding}    {'(loopback — local only)' if is_loopback else '(NON-LOOPBACK)'}"
+    )
     print(f"  root:     {root}")
     print(f"  db:       {db_path}")
     print(f"  provider: {provider}   model: {model}")
@@ -900,18 +1003,20 @@ def _print_banner(host: str, port: int, root: Path, db_path: Path,
     print(f"  static:   {static_dir or '(none — REST + WS only)'}")
     if not is_loopback:
         print()
-        print("  ‼ BINDING NON-LOOPBACK. Your codebase is reachable from every "
-              "device on this network.")
+        print(
+            "  ‼ BINDING NON-LOOPBACK. Your codebase is reachable from every "
+            "device on this network."
+        )
         print("  ‼ Token + provider keys may be at risk. Ctrl-C now if unintended.")
     print()
-    print("  ⚠ Anyone with the token can read this codebase. Rotate by "
-          "restarting (or --reuse-token).")
+    print(
+        "  ⚠ Anyone with the token can read this codebase. Rotate by restarting (or --reuse-token)."
+    )
     print()
     print(f"  open: {binding}/?token={token}")
     if provider == "anthropic":
         print()
-        print("  ⚠ Provider: anthropic — chat content WILL leave your machine "
-              "(api.anthropic.com).")
+        print("  ⚠ Provider: anthropic — chat content WILL leave your machine (api.anthropic.com).")
         print("    Embeddings remain local via Ollama.")
     sys.stdout.flush()
 
@@ -963,18 +1068,29 @@ def run(
             token = issue_token(meta_dir)
 
     app = create_app(
-        db_path=db_path, default_root=root, token=token,
-        static_dir=static_dir, quiet=quiet,
+        db_path=db_path,
+        default_root=root,
+        token=token,
+        static_dir=static_dir,
+        quiet=quiet,
         chat_defaults=chat_defaults,
     )
 
     _print_banner(
-        host, port, root, db_path, token, target_path,
-        static_dir, chat_defaults or {},
+        host,
+        port,
+        root,
+        db_path,
+        token,
+        target_path,
+        static_dir,
+        chat_defaults or {},
     )
 
     uvicorn.run(
-        app, host=host, port=port,
+        app,
+        host=host,
+        port=port,
         log_level="warning" if quiet else "info",
         access_log=not quiet,
     )

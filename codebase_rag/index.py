@@ -5,8 +5,9 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import re
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
+from typing import Any
 
 import chromadb
 import ollama
@@ -54,9 +55,7 @@ def read_notes(root: Path) -> str:
 def write_notes(root: Path, content: str) -> Path:
     meta_dir = project_meta_dir(root)
     meta_dir.mkdir(parents=True, exist_ok=True)
-    (meta_dir / "info.json").write_text(
-        f'{{"root": "{str(root.resolve())}"}}\n', encoding="utf-8"
-    )
+    (meta_dir / "info.json").write_text(f'{{"root": "{str(root.resolve())}"}}\n', encoding="utf-8")
     notes_path = meta_dir / "notes.md"
     notes_path.write_text(content, encoding="utf-8")
     return notes_path
@@ -69,27 +68,89 @@ def clear_notes(root: Path) -> bool:
         return True
     return False
 
+
 EXCLUDE_DIRS = {
-    ".git", ".svn", ".hg",
-    "node_modules", "bower_components", "vendor", "third_party", "Pods",
-    "__pycache__", ".venv", "venv", "env", ".tox",
-    "dist", "build", "out", ".next", ".nuxt", ".turbo", ".svelte-kit",
-    "target", ".gradle", "DerivedData",
-    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", "coverage",
-    ".idea", ".vscode",
+    ".git",
+    ".svn",
+    ".hg",
+    "node_modules",
+    "bower_components",
+    "vendor",
+    "third_party",
+    "Pods",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    ".tox",
+    "dist",
+    "build",
+    "out",
+    ".next",
+    ".nuxt",
+    ".turbo",
+    ".svelte-kit",
+    "target",
+    ".gradle",
+    "DerivedData",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".cache",
+    "coverage",
+    ".idea",
+    ".vscode",
 }
 EXCLUDE_EXTS = {
-    ".lock", ".log", ".bin", ".exe", ".so", ".dylib", ".o", ".a",
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".tiff",
-    ".pdf", ".woff", ".woff2", ".ttf", ".otf", ".eot",
-    ".mp4", ".mov", ".mp3", ".wav", ".ogg", ".flac",
-    ".zip", ".tar", ".gz", ".bz2", ".7z", ".rar",
-    ".pyc", ".pyo", ".class", ".jar",
+    ".lock",
+    ".log",
+    ".bin",
+    ".exe",
+    ".so",
+    ".dylib",
+    ".o",
+    ".a",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".ico",
+    ".webp",
+    ".tiff",
+    ".pdf",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+    ".mp4",
+    ".mov",
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".flac",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".7z",
+    ".rar",
+    ".pyc",
+    ".pyo",
+    ".class",
+    ".jar",
     ".map",  # source maps
 }
 EXCLUDE_NAME_PATTERNS = (
-    ".min.js", ".min.css", ".bundle.js", ".bundle.css",
-    "-lock.json", "_pb.go", "_pb.py", ".pb.go",
+    ".min.js",
+    ".min.css",
+    ".bundle.js",
+    ".bundle.css",
+    "-lock.json",
+    "_pb.go",
+    "_pb.py",
+    ".pb.go",
 )
 IGNORE_FILE_NAME = ".codebaseragignore"
 MAX_FILE_BYTES = 200_000
@@ -250,9 +311,7 @@ def reset_index(db_path: Path, root: Path) -> None:
         all_result = collection.get(include=["metadatas"])
         ids = result_get_ids(all_result)
         metas = all_result.get("metadatas") or []
-        legacy_ids = [
-            cid for cid, m in zip(ids, metas) if cid and not (m and m.get("kind"))
-        ]
+        legacy_ids = [cid for cid, m in zip(ids, metas) if cid and not (m and m.get("kind"))]
         if legacy_ids:
             collection.delete(ids=legacy_ids)
     except Exception:
@@ -298,7 +357,9 @@ def _collection_summary(collection) -> dict:
         kind = meta.get("kind")
         if kind == "reference":
             label = meta.get("label", "reference")
-            references.setdefault(label, {})[path] = references.setdefault(label, {}).get(path, 0) + 1
+            references.setdefault(label, {})[path] = (
+                references.setdefault(label, {}).get(path, 0) + 1
+            )
         elif kind == "project":
             project_chunks += 1
             project_files[path] = project_files.get(path, 0) + 1
@@ -375,8 +436,7 @@ def stats(db_path: Path, root: Path | None = None) -> None:
         ref_summary = ""
         if summary["references"]:
             ref_summary = "  refs: " + ", ".join(
-                f"{label}({sum(files.values())})"
-                for label, files in summary["references"].items()
+                f"{label}({sum(files.values())})" for label, files in summary["references"].items()
             )
         notes_marker = ""
         try:
@@ -434,16 +494,18 @@ def _search_hits(
             continue
         dist = distances[i] if i < len(distances) else None
         score = (1.0 - dist) if isinstance(dist, (int, float)) else None
-        hits.append({
-            "path": meta.get("path", ""),
-            "start_line": meta.get("start_line", 0),
-            "end_line": meta.get("end_line", 0),
-            "content": doc,
-            "distance": dist,
-            "score": score,
-            "kind": meta.get("kind") or "project",
-            "label": meta.get("label") or "",
-        })
+        hits.append(
+            {
+                "path": meta.get("path", ""),
+                "start_line": meta.get("start_line", 0),
+                "end_line": meta.get("end_line", 0),
+                "content": doc,
+                "distance": dist,
+                "score": score,
+                "kind": meta.get("kind") or "project",
+                "label": meta.get("label") or "",
+            }
+        )
         if len(hits) >= top_k:
             break
     return hits
@@ -615,8 +677,14 @@ def _ingest(
         print(f"  (collection: {collection.name})")
     else:
         print(f"Project: {project_root}  (collection: {collection.name})")
-    _emit("start", source=str(source), project=str(project_root),
-          collection=collection.name, kind=kind, label=label)
+    _emit(
+        "start",
+        source=str(source),
+        project=str(project_root),
+        collection=collection.name,
+        kind=kind,
+        label=label,
+    )
 
     indexed_mtimes = _load_indexed_mtimes(collection, kind=kind, label=label)
     user_excludes = tuple(extra_excludes) + tuple(_load_ignore_file(source))
@@ -645,8 +713,13 @@ def _ingest(
             chunk["mtime"] = current_mtime
             chunks.append(chunk)
 
-    _emit("discover", total_chunks=len(chunks), files_to_clear=len(files_to_clear),
-          unchanged=skipped, nested_repos=len(nested_repos))
+    _emit(
+        "discover",
+        total_chunks=len(chunks),
+        files_to_clear=len(files_to_clear),
+        unchanged=skipped,
+        nested_repos=len(nested_repos),
+    )
 
     if not chunks:
         kind_label = f"reference '{label}'" if kind == "reference" else "indexable files"
@@ -672,10 +745,7 @@ def _ingest(
         batch = chunks[i : i + EMBED_BATCH]
         embeddings = embed_texts([c["content"] for c in batch])
         collection.upsert(
-            ids=[
-                _chunk_id(kind, label, c["path"], c["start_line"], c["end_line"])
-                for c in batch
-            ],
+            ids=[_chunk_id(kind, label, c["path"], c["start_line"], c["end_line"]) for c in batch],
             embeddings=embeddings,
             documents=[c["content"] for c in batch],
             metadatas=[
@@ -692,8 +762,7 @@ def _ingest(
         )
         done = min(i + EMBED_BATCH, len(chunks))
         print(f"  {done}/{len(chunks)}")
-        _emit("embed", done=done, total=len(chunks),
-              current_file=batch[-1]["path"])
+        _emit("embed", done=done, total=len(chunks), current_file=batch[-1]["path"])
 
     print("Done.")
     _emit("done", total_chunks=len(chunks), unchanged=skipped)

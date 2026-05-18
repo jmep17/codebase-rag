@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Iterable
+from collections.abc import Iterable
 
 
 class ProviderUnavailable(RuntimeError):
     """Raised when an optional provider's SDK isn't installed."""
 
 
-def make_provider(name: str, *, api_key: str | None = None) -> "ChatProvider":
+def make_provider(name: str, *, api_key: str | None = None) -> ChatProvider:
     name = name.lower()
     if name == "ollama":
         return OllamaProvider()
@@ -67,6 +67,7 @@ class OllamaProvider(ChatProvider):
 
     def iter_chat_events(self, model, messages, tools, options):
         import ollama
+
         t0 = time.time()
         content = ""
         tool_calls: list = []
@@ -100,6 +101,7 @@ class OllamaProvider(ChatProvider):
 
     def stream_chat(self, model, messages, tools, options, *, verbose):
         import ollama
+
         t0 = time.time()
         content = ""
         tool_calls: list = []
@@ -183,23 +185,34 @@ class AnthropicProvider(ChatProvider):
                 final = stream.get_final_message()
         except self._anthropic.APIStatusError as e:
             elapsed = time.time() - t0
-            yield ("done", f"[anthropic error: {e}]", [], {
-                "elapsed": elapsed, "prompt_tokens": 0, "output_tokens": 0,
-                "prompt_eval_duration": 0, "eval_duration": elapsed, "load_duration": 0,
-            })
+            yield (
+                "done",
+                f"[anthropic error: {e}]",
+                [],
+                {
+                    "elapsed": elapsed,
+                    "prompt_tokens": 0,
+                    "output_tokens": 0,
+                    "prompt_eval_duration": 0,
+                    "eval_duration": elapsed,
+                    "load_duration": 0,
+                },
+            )
             return
 
         elapsed = time.time() - t0
 
         for block in final.content:
             if getattr(block, "type", None) == "tool_use":
-                tool_calls.append({
-                    "function": {
-                        "name": block.name,
-                        "arguments": block.input or {},
-                    },
-                    "_anthropic_id": block.id,
-                })
+                tool_calls.append(
+                    {
+                        "function": {
+                            "name": block.name,
+                            "arguments": block.input or {},
+                        },
+                        "_anthropic_id": block.id,
+                    }
+                )
             elif getattr(block, "type", None) == "text" and not content:
                 content += block.text
 
@@ -255,8 +268,14 @@ class AnthropicProvider(ChatProvider):
             return (
                 f"[anthropic error: {e}]",
                 [],
-                {"elapsed": elapsed, "prompt_tokens": 0, "output_tokens": 0,
-                 "prompt_eval_duration": 0, "eval_duration": elapsed, "load_duration": 0},
+                {
+                    "elapsed": elapsed,
+                    "prompt_tokens": 0,
+                    "output_tokens": 0,
+                    "prompt_eval_duration": 0,
+                    "eval_duration": elapsed,
+                    "load_duration": 0,
+                },
             )
 
         elapsed = time.time() - t0
@@ -265,15 +284,17 @@ class AnthropicProvider(ChatProvider):
 
         for block in final.content:
             if getattr(block, "type", None) == "tool_use":
-                tool_calls.append({
-                    "function": {
-                        "name": block.name,
-                        "arguments": block.input or {},
-                    },
-                    # Stash the Anthropic id so we can pair tool_result correctly
-                    # when this history is re-translated next turn.
-                    "_anthropic_id": block.id,
-                })
+                tool_calls.append(
+                    {
+                        "function": {
+                            "name": block.name,
+                            "arguments": block.input or {},
+                        },
+                        # Stash the Anthropic id so we can pair tool_result correctly
+                        # when this history is re-translated next turn.
+                        "_anthropic_id": block.id,
+                    }
+                )
             elif getattr(block, "type", None) == "text" and not content:
                 # Some responses arrive without text_stream firing (rare); fall back.
                 content += block.text
@@ -309,11 +330,13 @@ def _ollama_tools_to_anthropic(tools: Iterable[dict]) -> list[dict]:
         name = fn.get("name")
         if not name:
             continue
-        out.append({
-            "name": name,
-            "description": fn.get("description") or "",
-            "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
-        })
+        out.append(
+            {
+                "name": name,
+                "description": fn.get("description") or "",
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+            }
+        )
     return out
 
 
@@ -366,12 +389,14 @@ def _ollama_history_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]
                         args = {}
                 if not isinstance(args, dict):
                     args = {}
-                blocks.append({
-                    "type": "tool_use",
-                    "id": tid,
-                    "name": fn.get("name", ""),
-                    "input": args,
-                })
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": tid,
+                        "name": fn.get("name", ""),
+                        "input": args,
+                    }
+                )
             if not blocks:
                 blocks = [{"type": "text", "text": " "}]
             out.append({"role": "assistant", "content": blocks})
