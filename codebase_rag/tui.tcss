@@ -263,6 +263,9 @@ ModalScreen {
 .confirm-modal.shell {
     border: thick $info;
 }
+.confirm-modal.write {
+    height: 80%;
+}
 
 .modal-head {
     color: $warn;
@@ -294,12 +297,16 @@ ModalScreen {
     margin: 0 0 1 0;
 }
 
+.modal-diff-scroll {
+    height: 1fr;
+    background: $bg-0;
+    margin: 0 0 1 0;
+}
+
 .modal-diff {
     height: auto;
-    background: $bg-0;
     color: $fg-1;
     padding: 1 2;
-    margin: 0 0 1 0;
 }
 
 .modal-prompt {

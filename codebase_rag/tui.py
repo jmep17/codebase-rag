@@ -22,6 +22,7 @@ Entry point: run_tui(). Called by codebase_rag/__main__.py when --tui is set.
 
 from __future__ import annotations
 
+import difflib
 import json
 import queue
 from collections.abc import Callable
@@ -29,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -88,6 +90,15 @@ class _ConfirmBase(ModalScreen):
 class ConfirmWriteModal(_ConfirmBase):
     """Mirrors designs/cli.html scene 'confirm-write'."""
 
+    BINDINGS = _ConfirmBase.BINDINGS + [
+        Binding("up", "preview_up", "Scroll up", show=False, priority=True),
+        Binding("down", "preview_down", "Scroll down", show=False, priority=True),
+        Binding("pageup", "preview_page_up", "Page up", show=False, priority=True),
+        Binding("pagedown", "preview_page_down", "Page down", show=False, priority=True),
+        Binding("home", "preview_home", "Top", show=False, priority=True),
+        Binding("end", "preview_end", "Bottom", show=False, priority=True),
+    ]
+
     def __init__(self, tname: str, args: dict, result_queue: queue.Queue) -> None:
         super().__init__(args, result_queue)
         self.tname = tname
@@ -101,49 +112,75 @@ class ConfirmWriteModal(_ConfirmBase):
                 classes="modal-head write",
             )
             yield Static(path, classes="modal-target")
-            yield Static(self._build_preview(), classes="modal-diff")
+            with VerticalScroll(id="confirm-preview", classes="modal-diff-scroll"):
+                yield Static(self._build_preview(), classes="modal-diff")
             yield Static(
-                "[bold]\\[a][/]pprove   [bold]\\[r][/]eject",
+                "[bold]\\[a][/]pprove   [bold]\\[r][/]eject   [bold]↑/↓ PgUp/PgDn[/] scroll",
                 classes="modal-prompt",
             )
 
-    def _build_preview(self) -> str:
+    def _preview(self) -> VerticalScroll:
+        return self.query_one("#confirm-preview", VerticalScroll)
+
+    def action_preview_up(self) -> None:
+        self._preview().scroll_up()
+
+    def action_preview_down(self) -> None:
+        self._preview().scroll_down()
+
+    def action_preview_page_up(self) -> None:
+        self._preview().scroll_page_up()
+
+    def action_preview_page_down(self) -> None:
+        self._preview().scroll_page_down()
+
+    def action_preview_home(self) -> None:
+        self._preview().scroll_home()
+
+    def action_preview_end(self) -> None:
+        self._preview().scroll_end()
+
+    def _build_preview(self) -> Text:
+        preview = Text()
         if self.tname == "create_project":
             files = self.args.get("files")
             if isinstance(files, list):
-                paths = [item.get("path", "?") for item in files[:12] if isinstance(item, dict)]
+                paths = [item.get("path", "?") for item in files if isinstance(item, dict)]
                 file_count = len(files)
             else:
                 paths = ["README.md", ".gitignore"]
                 file_count = 2
-            out = [f"[#5b8b73]{file_count} file(s)[/]"]
-            out.extend(f"+ {path}" for path in paths)
-            if file_count > len(paths):
-                out.append(f"... ({file_count - len(paths)} more files)")
-            return "\n".join(out)
+            preview.append(f"{file_count} file(s)\n", style="#5b8b73")
+            for path in paths:
+                preview.append(f"+ {path}\n", style="#4ade80")
+            return preview
         if self.tname == "edit_file":
-            old = (self.args.get("old_string") or "").splitlines() or [""]
-            new = (self.args.get("new_string") or "").splitlines() or [""]
-            lines: list[str] = []
-            for ln in old[:8]:
-                lines.append(f"[#f87171]- {ln}[/]")
-            if len(old) > 8:
-                lines.append(f"[#f87171]- ... ({len(old) - 8} more)[/]")
-            for ln in new[:8]:
-                lines.append(f"[#4ade80]+ {ln}[/]")
-            if len(new) > 8:
-                lines.append(f"[#4ade80]+ ... ({len(new) - 8} more)[/]")
-            return "\n".join(lines)
+            old = self.args.get("old_string") or ""
+            new = self.args.get("new_string") or ""
+            path = self.args.get("path", "?")
+            for line in difflib.unified_diff(
+                old.splitlines(),
+                new.splitlines(),
+                lineterm="",
+                fromfile=f"{path} (current)",
+                tofile=f"{path} (proposed)",
+            ):
+                if line.startswith("-"):
+                    style = "#f87171"
+                elif line.startswith("+"):
+                    style = "#4ade80"
+                else:
+                    style = ""
+                preview.append(line + "\n", style=style)
+            return preview
         content = self.args.get("content", "") or ""
         text_lines = content.splitlines() or [""]
         size = len(content.encode("utf-8"))
         head = f"{len(text_lines)} lines, {size} bytes"
-        out = [f"[#5b8b73]{head}[/]"]
-        for i, ln in enumerate(text_lines[:15], 1):
-            out.append(f"{i:4d}: {ln}")
-        if len(text_lines) > 15:
-            out.append(f"... ({len(text_lines) - 15} more lines)")
-        return "\n".join(out)
+        preview.append(f"{head}\n", style="#5b8b73")
+        for i, ln in enumerate(text_lines, 1):
+            preview.append(f"{i:4d}: {ln}\n")
+        return preview
 
 
 class ConfirmShellModal(_ConfirmBase):
