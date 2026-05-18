@@ -19,6 +19,37 @@ from . import training as training_mod
 DEFAULT_DB = Path.home() / ".codebase-rag" / "db"
 
 
+def _print_missing_command(parser: argparse.ArgumentParser) -> None:
+    parser.print_usage(sys.stderr)
+    print(
+        "\nerror: missing command.\n"
+        "  Try:             codebase-rag --help\n"
+        "  Terminal chat:    codebase-rag chat\n"
+        "  Browser backend:  codebase-rag serve",
+        file=sys.stderr,
+    )
+
+
+def _print_missing_extra(
+    *,
+    feature: str,
+    extra: str,
+    modules: tuple[str, ...],
+    retry: str,
+    error: ImportError,
+) -> None:
+    missing = f" ({error.name})" if getattr(error, "name", None) else ""
+    print(
+        f"error: {feature} needs optional dependencies that are not installed{missing}.\n"
+        f"  Install: .venv/bin/python -m pip install -e '.[{extra}]'\n"
+        f"  Then:    {retry}\n"
+        f"  Modules: {', '.join(modules)}\n"
+        f"  Note: keep the quotes around '.[{extra}]' in zsh.\n"
+        f"  Underlying: {error}",
+        file=sys.stderr,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="codebase-rag",
@@ -596,6 +627,10 @@ def main() -> None:
         metavar="HOST_GLOB",
     )
 
+    if len(sys.argv) == 1:
+        _print_missing_command(parser)
+        sys.exit(2)
+
     args = parser.parse_args()
 
     if args.command == "index":
@@ -688,10 +723,13 @@ def main() -> None:
         if args.tui:
             try:
                 from . import tui as tui_mod
-            except ImportError:
-                print(
-                    "error: --tui requires `pip install -e .[tui]` (Textual).",
-                    file=sys.stderr,
+            except ImportError as e:
+                _print_missing_extra(
+                    feature="--tui",
+                    extra="tui",
+                    modules=("textual",),
+                    retry=".venv/bin/codebase-rag chat --tui",
+                    error=e,
                 )
                 sys.exit(1)
             tui_mod.run_tui(
@@ -741,11 +779,12 @@ def main() -> None:
         try:
             from . import serve as serve_mod
         except ImportError as e:
-            print(
-                "error: `serve` requires `pip install -e .[serve]` "
-                "(starlette, uvicorn, websockets).\n"
-                f"  underlying: {e}",
-                file=sys.stderr,
+            _print_missing_extra(
+                feature="`serve`",
+                extra="serve",
+                modules=("starlette", "uvicorn", "websockets"),
+                retry=".venv/bin/codebase-rag serve",
+                error=e,
             )
             sys.exit(1)
         if not args.root.exists():
@@ -781,11 +820,12 @@ def main() -> None:
             import starlette  # noqa: F401
             import uvicorn  # noqa: F401
         except ImportError as e:
-            print(
-                "error: `serve` requires `pip install -e .[serve]` "
-                "(starlette, uvicorn, websockets).\n"
-                f"  underlying: {e}",
-                file=sys.stderr,
+            _print_missing_extra(
+                feature="`serve`",
+                extra="serve",
+                modules=("starlette", "uvicorn", "websockets"),
+                retry=".venv/bin/codebase-rag serve",
+                error=e,
             )
             sys.exit(1)
         serve_mod.run(

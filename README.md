@@ -288,7 +288,7 @@ Most commands accept either a project root (`--root` / `--for-project`) or datab
 
 ### Serve
 
-`serve` starts the local HTTP/WebSocket backend. It requires `pip install -e .[serve]`.
+`serve` starts the local HTTP/WebSocket backend. It requires `pip install -e '.[serve]'`.
 
 | Flag | What it does | Example |
 |---|---|---|
