@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codebase-rag · Browser redesign (terminal-native, retro)</title>
+<style>
+  /*
+   * Browser redesign — same terminal-retro tokens as cli.html, surface tuned for the web.
+   * Contrast verified against bg-0 #050807; see cli.html for full ratios.
+   * Sans is reserved for chrome metadata; the conversation body stays mono so the
+   * "every surface looks like the CLI" rule from SPEC §3 holds.
+   */
+  :root{
+    --bg-0:#050807; --bg-1:#0c1110; --bg-2:#142019; --bg-3:#1c2a23;
+    --border:#1f3b2e; --border-soft:#16261f; --border-hot:#2f7d4e;
+    --fg-0:#d6f5e3; --fg-1:#98c9af; --fg-2:#5b8b73; --fg-dim:#3d5e4d;
+    --accent:#4ade80; --accent-soft:#14361e;
+    --ok:#4ade80; --warn:#fbbf24; --danger:#f87171; --info:#22d3ee; --purple:#c084fc;
+    --mono:"JetBrains Mono","Berkeley Mono",ui-monospace,SF Mono,Consolas,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--fg-0);font-family:var(--sans);font-size:14px;line-height:1.55}
+  body{padding:24px;display:flex;flex-direction:column;align-items:center;gap:18px;min-height:100vh;
+    background-image:linear-gradient(rgba(74,222,128,.018) 50%, transparent 50%);background-size:100% 3px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,[role="switch"]:focus-visible{
+    outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+  kbd{font-family:var(--mono);font-size:11px;color:var(--fg-1);background:var(--bg-3);
+    border:1px solid var(--border);border-radius:3px;padding:1px 5px}
+
+  .pageHead{width:min(1280px,100%);display:flex;align-items:baseline;justify-content:space-between;gap:24px}
+  .pageHead h1{margin:0;font-size:15px;font-weight:600;color:var(--fg-0);letter-spacing:.02em;font-family:var(--mono)}
+  .pageHead .sub{color:var(--fg-2);font-size:12px;font-family:var(--mono)}
+  .pageHead .legend{margin-left:auto;color:var(--fg-2);font-size:12px;display:flex;gap:14px;font-family:var(--mono)}
+  .pageHead .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+  .sceneBar{width:min(1280px,100%);display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-family:var(--mono)}
+  .sceneBar .grp{display:inline-flex;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:3px;gap:2px}
+  .sceneBar button{appearance:none;background:transparent;border:0;color:var(--fg-1);font:inherit;font-size:12px;
+    padding:8px 14px;border-radius:4px;cursor:pointer;min-height:36px}
+  .sceneBar button[aria-pressed="true"]{background:var(--accent-soft);color:var(--fg-0);box-shadow:inset 0 0 0 1px var(--border-hot)}
+  .sceneBar button:hover:not([aria-pressed="true"]){background:var(--bg-2)}
+  .sceneBar .hint{color:var(--fg-2);font-size:12px;margin-left:auto}
+
+  /* browser frame */
+  .frame{width:min(1280px,100%);background:var(--bg-0);border:1px solid var(--border);border-radius:10px;overflow:hidden;
+    box-shadow:0 0 0 1px #000, 0 24px 48px rgba(0,0,0,.6)}
+  .bChrome{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#080d0b;border-bottom:1px solid var(--border-soft)}
+  .lights{display:flex;gap:7px}
+  .lights span{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.4)}
+  .lights .r{background:#ff5f57}.lights .y{background:#febc2e}.lights .g{background:#28c840}
+  .bChrome .nav{color:var(--fg-dim);font-size:14px;display:flex;gap:10px;margin-left:8px}
+  .bChrome .nav button{appearance:none;background:transparent;border:0;color:var(--fg-dim);font:inherit;cursor:pointer;
+    padding:4px 6px;border-radius:3px;min-height:28px;min-width:28px}
+  .bChrome .nav button:hover{color:var(--fg-1);background:var(--bg-2)}
+  .bChrome .url{flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:6px 12px;
+    font-family:var(--mono);font-size:12px;color:var(--fg-1);display:flex;align-items:center;gap:8px}
+  .bChrome .url .lock{color:var(--ok)}
+  .bChrome .url .path{color:var(--fg-0)}
+  .bChrome .url .host{color:var(--fg-2)}
+  .bChrome .ext{display:flex;gap:6px}
+  .bChrome .ext span{width:22px;height:22px;border-radius:4px;background:var(--bg-2);border:1px solid var(--border-soft);display:flex;align-items:center;justify-content:center;color:var(--fg-2);font-size:11px}
+
+  /* top app bar */
+  .topbar{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--bg-1);
+    border-bottom:1px solid var(--border-soft);font-family:var(--mono);font-size:12px;color:var(--fg-1)}
+  .pill{display:inline-flex;align-items:center;gap:6px;cursor:pointer;padding:5px 10px;border-radius:6px;
+    background:transparent;border:1px solid transparent;color:var(--fg-1);font-family:var(--mono);font-size:12px;min-height:32px}
+  .pill:hover{background:var(--bg-2);border-color:var(--border-soft)}
+  .pillDot{width:8px;height:8px;border-radius:50%;box-shadow:0 0 6px currentColor}
+  .pillDot.ok{background:var(--ok);color:var(--ok)}
+  .pillDot.warn{background:var(--warn);color:var(--warn)}
+  .pillDot.danger{background:var(--danger);color:var(--danger)}
+  .pill b{color:var(--fg-0);font-weight:600}
+  .topbar .sep{color:var(--fg-dim)}
+  .topbar .right{margin-left:auto;display:flex;gap:6px;align-items:center}
+
+  /* tool-gating switches (the "shield panel" inlined into the topbar) */
+  .gate{display:inline-flex;align-items:center;gap:8px;padding:5px 10px;border-radius:6px;background:var(--bg-2);
+    border:1px solid var(--border-soft);min-height:32px;cursor:pointer}
+  .gate:hover{border-color:var(--border-hot)}
+  .gate b{color:var(--fg-0);font-weight:500;font-family:var(--mono);font-size:11px}
+  .switch{position:relative;width:28px;height:16px;border-radius:8px;background:var(--bg-3);border:1px solid var(--border);transition:.15s}
+  .switch::after{content:"";position:absolute;top:1px;left:1px;width:12px;height:12px;border-radius:50%;background:var(--fg-dim);transition:.15s}
+  .gate[aria-checked="true"] .switch{background:rgba(74,222,128,.22);border-color:var(--border-hot)}
+  .gate[aria-checked="true"] .switch::after{left:13px;background:var(--accent);box-shadow:0 0 6px var(--accent)}
+  .gate.warn[aria-checked="true"] .switch{background:rgba(251,191,36,.18);border-color:rgba(251,191,36,.5)}
+  .gate.warn[aria-checked="true"] .switch::after{background:var(--warn);box-shadow:0 0 6px var(--warn)}
+  .gate.danger[aria-checked="true"] .switch{background:rgba(248,113,113,.16);border-color:rgba(248,113,113,.5)}
+  .gate.danger[aria-checked="true"] .switch::after{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+
+  /* main grid */
+  .grid{display:grid;grid-template-columns:260px minmax(0,1fr) 300px;height:780px;min-height:0}
+  .col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border-soft);background:var(--bg-0)}
+  .col:last-child{border-right:none}
+  .col.nav{background:var(--bg-1)}
+  .colHead{padding:10px 14px;color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+    border-bottom:1px solid var(--border-soft);background:var(--bg-1);font-family:var(--mono)}
+  .colBody{overflow:auto;padding:10px 10px;flex:1}
+
+  /* left rail — top-level views + project tree */
+  .navItem{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;color:var(--fg-1);
+    font-family:var(--mono);font-size:13px;min-height:36px}
+  .navItem:hover{background:var(--bg-2);color:var(--fg-0)}
+  .navItem.on{background:var(--accent-soft);color:var(--fg-0);border:1px solid var(--border-hot)}
+  .navItem .ic{color:var(--fg-2);width:14px;text-align:center}
+  .navItem.on .ic{color:var(--accent)}
+  .navItem .badge{margin-left:auto;color:var(--warn);font-size:11px}
+
+  .secH{color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.12em;margin:18px 6px 8px;font-family:var(--mono)}
+  .proj{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:3px;font-family:var(--mono);font-size:12px;border:1px solid transparent}
+  .proj:hover{background:var(--bg-2)}
+  .proj.on{background:var(--bg-2);border-color:var(--border-hot);color:var(--fg-0)}
+  .proj .name{color:var(--fg-0);font-weight:500}
+  .proj .meta{color:var(--fg-2);font-size:11px;margin-top:2px}
+  .proj .sessions{margin-top:8px;padding-left:10px;border-left:1px dashed var(--border-soft);font-size:11px;display:flex;flex-direction:column;gap:2px}
+  .proj .sessions a{display:flex;justify-content:space-between;color:var(--fg-1);padding:3px 4px;border-radius:3px}
+  .proj .sessions a.cur{color:var(--accent);background:rgba(74,222,128,.06)}
+  .proj .sessions a:hover{background:var(--bg-3);color:var(--fg-0)}
+  .proj .sessions a .ago{color:var(--fg-dim)}
+
+  /* center: conversation */
+  .convo{display:flex;flex-direction:column;background:var(--bg-0)}
+  .chat{padding:24px 28px;overflow-y:auto;flex:1;font-family:var(--mono);font-size:13px}
+  .turn{margin-bottom:24px}
+  .user{display:flex;gap:10px;color:var(--fg-0)}
+  .user .ava{width:24px;height:24px;border-radius:4px;background:var(--bg-2);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:13px;flex-shrink:0}
+  .user .body{flex:1;padding-top:2px;white-space:pre-wrap}
+  .meta{color:var(--fg-2);font-size:11px;margin:8px 0 8px 34px;display:flex;gap:14px;flex-wrap:wrap}
+  .meta b{color:var(--fg-1);font-weight:500}
+
+  .card{margin:10px 0 10px 34px;border-radius:6px;background:var(--bg-1);border:1px solid var(--border-soft);
+    border-left:3px solid var(--info);overflow:hidden}
+  .card.tool{border-left-color:var(--purple)}
+  .card.edit{border-left-color:var(--warn);background:rgba(251,191,36,.05)}
+  .card.shell{border-left-color:var(--info)}
+  .card.web{border-left-color:var(--info)}
+  .card.declined{border-left-color:var(--danger);background:rgba(248,113,113,.04)}
+  .card.approved{border-left-color:var(--ok);background:rgba(74,222,128,.04)}
+  .cardHead{display:flex;align-items:center;gap:10px;padding:10px 14px;color:var(--fg-1);font-size:12px;
+    border-bottom:1px solid var(--border-soft)}
+  .cardHead .icon{font-weight:700;color:var(--info)}
+  .card.tool .cardHead .icon{color:var(--purple)}
+  .card.edit .cardHead .icon{color:var(--warn)}
+  .card.declined .cardHead .icon{color:var(--danger)}
+  .card.approved .cardHead .icon{color:var(--ok)}
+  .cardHead .t{color:var(--fg-0);font-weight:500}
+  .cardHead .right{margin-left:auto;color:var(--fg-2);font-size:11px;display:flex;gap:10px;align-items:center}
+  .cardBody{padding:10px 14px;font-size:12px}
+
+  .pillRow{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+  .chunkPill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:var(--bg-2);
+    border:1px solid var(--border-soft);color:var(--info);font-family:var(--mono);font-size:11px;cursor:pointer;min-height:28px}
+  .chunkPill:hover{border-color:var(--border-hot);color:var(--fg-0);background:var(--bg-3)}
+  .chunkPill .s{color:var(--fg-2);font-variant-numeric:tabular-nums}
+  .chunkPill.ref{color:var(--purple)}
+
+  .answer{color:var(--fg-0);padding:8px 0 0;line-height:1.7}
+  .answer p{margin:0 0 10px}
+  .answer code{color:var(--accent);background:var(--bg-2);padding:1px 5px;border-radius:3px;border:1px solid var(--border-soft);font-family:var(--mono);font-size:12px}
+  .answer pre{background:var(--bg-2);border:1px solid var(--border-soft);border-radius:4px;padding:10px 12px;overflow-x:auto;
+    color:var(--fg-0);font-family:var(--mono);font-size:12px}
+  .stream::after{content:"▎";color:var(--accent);animation:blink 1s steps(2,end) infinite;margin-left:2px}
+  @keyframes blink{50%{opacity:0}}
+  @media (prefers-reduced-motion: reduce){
+    .stream::after{animation:none}
+  }
+
+  .diff{font-family:var(--mono);font-size:12px;line-height:1.65;background:var(--bg-2);border-radius:4px;
+    padding:10px 12px;border:1px solid var(--border-soft);overflow-x:auto}
+  .diff div{white-space:pre}
+  .diff .minus{color:var(--danger)}
+  .diff .plus{color:var(--ok)}
+  .diff .ctx{color:var(--fg-2)}
+  .diff .h{color:var(--info)}
+
+  .btnRow{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font:inherit;font-size:12px;padding:8px 16px;border-radius:5px;cursor:pointer;min-height:36px;
+    background:var(--bg-2);color:var(--fg-0);border:1px solid var(--border)}
+  .btn:hover{background:var(--bg-3);border-color:var(--border-hot)}
+  .btn.primary{background:var(--accent-soft);border-color:var(--border-hot);color:var(--accent)}
+  .btn.primary:hover{background:rgba(74,222,128,.18)}
+  .btn.danger{color:var(--danger);border-color:rgba(248,113,113,.35)}
+  .btn.danger:hover{background:rgba(248,113,113,.08)}
+  .btn .k{margin-left:6px;color:var(--fg-dim);font-size:10px}
+
+  /* composer */
+  .composer{padding:12px 18px;background:var(--bg-1);border-top:1px solid var(--border)}
+  .composer .pinned{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-2);border:1px solid var(--border-soft);
+    border-radius:14px;padding:4px 10px;font-family:var(--mono);font-size:11px;color:var(--fg-1)}
+  .chip .x{color:var(--fg-2);cursor:pointer}
+  .composer .row{display:flex;align-items:flex-start;gap:12px}
+  .composer textarea{flex:1;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--fg-0);
+    padding:10px 12px;min-height:60px;font-family:var(--mono);font-size:14px;resize:vertical;line-height:1.5}
+  .composer textarea:focus{border-color:var(--border-hot);outline:0;box-shadow:0 0 0 2px rgba(74,222,128,.25)}
+  .composer .tools{display:flex;flex-direction:column;gap:6px}
+  .iconbtn{width:36px;height:36px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--bg-2);
+    border:1px solid var(--border);color:var(--fg-1);cursor:pointer;font-family:var(--mono);font-size:14px}
+  .iconbtn:hover{border-color:var(--border-hot);color:var(--fg-0)}
+  .composer .send{background:var(--accent-soft);border-color:var(--border-hot);color:var(--accent);
+    padding:0 18px;height:36px;border-radius:6px;font-family:var(--mono);font-size:12px;cursor:pointer;min-width:80px}
+  .composer .send:hover{background:rgba(74,222,128,.2)}
+
+  /* right rail */
+  .right .colBody{padding:12px 12px}
+  .rcard{margin-bottom:14px;background:var(--bg-1);border:1px solid var(--border-soft);border-radius:6px;overflow:hidden}
+  .rcard .h{padding:8px 12px;border-bottom:1px solid var(--border-soft);color:var(--fg-2);text-transform:uppercase;
+    letter-spacing:.1em;font-size:10px;font-family:var(--mono);display:flex;justify-content:space-between}
+  .rcard .h b{color:var(--fg-1);font-weight:500}
+  .rcard .b{padding:8px 12px;font-size:12px}
+
+  .pin{display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border-radius:4px;color:var(--fg-1);font-family:var(--mono);font-size:12px;cursor:pointer}
+  .pin:hover{background:var(--bg-2);color:var(--fg-0)}
+  .pin .size{color:var(--fg-dim);font-size:11px}
+
+  .gitbox{font-family:var(--mono);font-size:12px;color:var(--fg-1)}
+  .gitbox .b{color:var(--accent)}
+  .gitbox .dirty{color:var(--warn)}
+  .gitbox .f{color:var(--fg-2);font-size:11px;margin-left:14px;display:block}
+
+  .modelbox{font-family:var(--mono);font-size:12px;color:var(--fg-1);display:flex;flex-direction:column;gap:4px}
+  .modelbox .row{display:flex;justify-content:space-between;gap:10px}
+  .modelbox .row span:first-child{color:var(--fg-2)}
+  .modelbox .row span:last-child{color:var(--fg-0)}
+
+  /* INDEX VIEW */
+  .indexView{padding:24px 32px;height:780px;overflow:auto;background:var(--bg-0)}
+  .indexView h2{margin:0 0 6px;font-size:18px;font-family:var(--mono);color:var(--fg-0)}
+  .indexView .desc{color:var(--fg-2);font-family:var(--mono);font-size:12px;margin-bottom:18px}
+  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+  .toolbar input,.toolbar select{background:var(--bg-1);border:1px solid var(--border);border-radius:5px;color:var(--fg-0);padding:8px 10px;font-family:var(--mono);font-size:12px;min-height:36px}
+  .toolbar input{flex:1;min-width:220px}
+  .toolbar .btn{padding:8px 14px}
+
+  .projTable{width:100%;border-collapse:collapse;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;overflow:hidden;font-family:var(--mono);font-size:12px}
+  .projTable th,.projTable td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border-soft);vertical-align:middle}
+  .projTable th{color:var(--fg-2);font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.1em;background:var(--bg-2)}
+  .projTable tr:last-child td{border-bottom:0}
+  .projTable tr:hover td{background:var(--bg-2)}
+  .projTable .name{color:var(--fg-0);font-weight:500}
+  .projTable .num{font-variant-numeric:tabular-nums;color:var(--fg-1)}
+  .projTable .stale{color:var(--warn)}
+  .projTable .ok{color:var(--ok)}
+  .actions{display:flex;gap:6px;justify-content:flex-end}
+  .actions button{appearance:none;background:transparent;border:0;color:var(--fg-2);cursor:pointer;padding:4px 8px;border-radius:3px;font-family:var(--mono);font-size:11px;min-height:28px}
+  .actions button:hover{background:var(--bg-3);color:var(--fg-0)}
+
+  .indexNow{margin-top:20px;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:16px 18px}
+  .indexNow .h{display:flex;justify-content:space-between;font-family:var(--mono);font-size:13px;color:var(--fg-0)}
+  .indexNow .h .right{color:var(--fg-2);font-size:11px}
+  .bar{height:8px;background:var(--bg-3);border:1px solid var(--border-soft);border-radius:3px;overflow:hidden;margin:10px 0}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--info));box-shadow:0 0 12px var(--accent)}
+  .logBox{margin-top:8px;background:var(--bg-0);border:1px solid var(--border-soft);border-radius:4px;
+    padding:10px 12px;font-family:var(--mono);font-size:11px;color:var(--fg-1);max-height:140px;overflow:auto}
+  .logBox .ln{display:flex;gap:10px;padding:1px 0}
+  .logBox .ts{color:var(--fg-dim);min-width:80px;font-variant-numeric:tabular-nums}
+  .logBox .ok::after{color:var(--ok)}
+
+  /* AUDIT VIEW */
+  .auditView{height:780px;display:grid;grid-template-rows:auto 1fr;background:var(--bg-0)}
+  .auditBar{padding:14px 20px;border-bottom:1px solid var(--border-soft);background:var(--bg-1);
+    display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-family:var(--mono);font-size:12px}
+  .auditBar h2{margin:0;font-size:14px;color:var(--fg-0);margin-right:14px}
+  .auditChip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-2);border:1px solid var(--border);
+    border-radius:14px;padding:5px 12px;color:var(--fg-1);font-size:11px;cursor:pointer;min-height:30px}
+  .auditChip:hover{border-color:var(--border-hot);color:var(--fg-0)}
+  .auditChip.on{background:var(--accent-soft);border-color:var(--border-hot);color:var(--accent)}
+  .auditChip b{color:var(--fg-0);font-weight:500;margin-left:4px}
+  .auditBar .right{margin-left:auto;color:var(--fg-2);font-size:11px;display:flex;gap:14px}
+
+  .auditList{overflow:auto;font-family:var(--mono);font-size:12px}
+  .ev{display:grid;grid-template-columns:130px 120px 1fr auto;gap:14px;padding:10px 20px;border-bottom:1px solid var(--border-soft);align-items:start;cursor:pointer}
+  .ev:hover{background:var(--bg-1)}
+  .ev .ts{color:var(--fg-2);font-variant-numeric:tabular-nums}
+  .ev .kind{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--fg-2)}
+  .ev .kind.toolcall{color:var(--purple)}
+  .ev .kind.toolresult{color:var(--info)}
+  .ev .kind.slash{color:var(--accent)}
+  .ev .kind.session{color:var(--fg-1)}
+  .ev .kind.declined{color:var(--danger)}
+  .ev .body{color:var(--fg-1);word-break:break-word}
+  .ev .body b{color:var(--fg-0);font-weight:500}
+  .ev .body .arg{color:var(--info)}
+  .ev .body .ok{color:var(--ok)}
+  .ev .body .err{color:var(--danger)}
+  .ev .dur{color:var(--fg-dim);font-size:11px}
+
+  /* SHIELD DRAWER (slide-over) */
+  .shieldDrawer{position:absolute;top:0;right:0;bottom:0;width:380px;background:var(--bg-1);border-left:1px solid var(--border-hot);
+    padding:18px 20px;overflow:auto;box-shadow:-12px 0 40px rgba(0,0,0,.5);font-family:var(--mono);font-size:12px;z-index:6}
+  .shieldDrawer h2{margin:0 0 4px;font-size:14px;color:var(--fg-0)}
+  .shieldDrawer .desc{color:var(--fg-2);font-size:11px;margin-bottom:18px}
+  .shieldDrawer .sH{color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin:18px 0 8px}
+  .shieldDrawer .sH:first-of-type{margin-top:0}
+  .row2{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--bg-2);
+    border:1px solid var(--border-soft);border-radius:6px;margin-bottom:6px}
+  .row2 .l{display:flex;flex-direction:column;gap:2px}
+  .row2 .l b{color:var(--fg-0);font-weight:500}
+  .row2 .l span{color:var(--fg-2);font-size:11px}
+  .closeBtn{position:absolute;top:14px;right:14px;background:transparent;border:0;color:var(--fg-2);cursor:pointer;
+    width:30px;height:30px;border-radius:4px;font-size:18px}
+  .closeBtn:hover{background:var(--bg-2);color:var(--fg-0)}
+
+  .legendRow{width:min(1280px,100%);font-family:var(--mono);font-size:12px;color:var(--fg-2);display:flex;gap:18px;flex-wrap:wrap;margin-top:-4px}
+  .legendRow b{color:var(--fg-1);font-weight:500}
+
+  @media (max-width:1100px){
+    body{padding:14px}
+    .grid{grid-template-columns:200px minmax(0,1fr) 240px}
+  }
+</style>
+</head>
+<body>
+
+<div class="pageHead">
+  <div>
+    <h1>codebase-rag · Browser redesign <span style="color:var(--accent)">v2</span></h1>
+    <div class="sub">Same product as the CLI, just rendered for a browser · phosphor-green palette · WCAG 2.1 AA</div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--ok)"></span><b>local</b></span>
+    <span><span class="dot" style="background:var(--warn)"></span><b>+ web (SearXNG)</b></span>
+    <span><span class="dot" style="background:var(--danger)"></span><b>+ cloud (Anthropic)</b></span>
+  </div>
+</div>
+
+<div class="legendRow">
+  Served by <code style="font-family:var(--mono);color:var(--accent)">codebase-rag serve</code> on
+  <code style="font-family:var(--mono);color:var(--accent)">127.0.0.1:8723</code>.
+  Information architecture mirrors the CLI exactly; what changes is layout, not the model.
+</div>
+
+<div class="sceneBar" role="tablist" aria-label="Design scenes">
+  <div class="grp" role="group">
+    <button role="tab" aria-pressed="true"  data-scene="chat">chat</button>
+    <button role="tab" aria-pressed="false" data-scene="confirm">tool-gate &amp; confirm</button>
+    <button role="tab" aria-pressed="false" data-scene="shield">shield drawer</button>
+    <button role="tab" aria-pressed="false" data-scene="index">indexing</button>
+    <button role="tab" aria-pressed="false" data-scene="audit">audit log</button>
+  </div>
+  <span class="hint">Five scenes · one shared frame</span>
+</div>
+
+<div class="frame">
+  <!-- browser chrome -->
+  <div class="bChrome">
+    <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="nav">
+      <button aria-label="back">‹</button>
+      <button aria-label="forward">›</button>
+      <button aria-label="reload">↻</button>
+    </div>
+    <div class="url">
+      <span class="lock">🔒</span>
+      <span class="host">127.0.0.1:8723</span><span style="color:var(--fg-dim)">/projects/</span><span class="path">codebase-rag/chat</span><span style="color:var(--fg-dim)">?session=a8c41f6e</span>
+    </div>
+    <div class="ext"><span title="codebase-rag extension">cr</span></div>
+  </div>
+
+  <!-- top app bar -->
+  <div class="topbar">
+    <span class="pill" aria-haspopup="dialog" aria-label="open network shield"><span class="pillDot ok"></span><b>local</b></span>
+    <span class="sep">│</span>
+    <span class="pill" aria-haspopup="listbox"><b>qwen2.5-coder:7b</b><span style="color:var(--fg-2);margin-left:4px">▾</span></span>
+    <span class="sep">│</span>
+
+    <span class="gate" role="switch" tabindex="0" aria-checked="true"><b>read</b><span class="switch"></span></span>
+    <span class="gate warn" role="switch" tabindex="0" aria-checked="true"><b>write</b><span class="switch"></span></span>
+    <span class="gate warn" role="switch" tabindex="0" aria-checked="false"><b>shell</b><span class="switch"></span></span>
+    <span class="gate danger" role="switch" tabindex="0" aria-checked="false"><b>web</b><span class="switch"></span></span>
+
+    <span class="right">
+      <span class="pill"><kbd>⌘K</kbd> command</span>
+      <span class="pill" style="color:var(--warn)">2 pending</span>
+    </span>
+  </div>
+
+  <!-- SCENE: CHAT -->
+  <div class="scene" data-scene="chat">
+    <div class="grid">
+      <!-- left rail -->
+      <aside class="col nav" aria-label="Navigation">
+        <div class="colBody">
+          <div class="navItem on"><span class="ic">▤</span> Chat</div>
+          <div class="navItem"><span class="ic">⌕</span> Search</div>
+          <div class="navItem"><span class="ic">⚙</span> Index <span class="badge">2 stale</span></div>
+          <div class="navItem"><span class="ic">📜</span> Audit log</div>
+          <div class="navItem"><span class="ic">⚒</span> Settings</div>
+
+          <div class="secH">Projects</div>
+          <div class="proj on">
+            <div class="name">codebase-rag</div>
+            <div class="meta">4.2k chunks · refs: 2 · main●</div>
+            <div class="sessions">
+              <a class="cur" aria-current="true">auth middleware<span class="ago">now</span></a>
+              <a>retrieval tuning<span class="ago">2h</span></a>
+              <a>refactor providers<span class="ago">1d</span></a>
+            </div>
+          </div>
+          <div class="proj">
+            <div class="name">marketing-site</div>
+            <div class="meta">312 ch · 4 sessions</div>
+          </div>
+          <div class="proj">
+            <div class="name">infra/terraform</div>
+            <div class="meta">1.1k ch · 1 session</div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- center: conversation -->
+      <main class="col convo" aria-label="Conversation">
+        <div class="chat">
+
+          <div class="turn">
+            <div class="user">
+              <div class="ava">&gt;</div>
+              <div class="body">how does the prompt-injection guard for retrieved chunks work?</div>
+            </div>
+            <div class="meta"><span>retrieve: <b>5 chunks + 2 pinned</b></span><span>·</span><span><b>1.2s</b></span><span>·</span><span>qwen2.5-coder:7b · ollama</span></div>
+
+            <div class="card">
+              <div class="cardHead">
+                <span class="icon">⟢</span><span class="t">retrieved</span>
+                <span style="color:var(--fg-2)">·  5 chunks · 124ms</span>
+                <span class="right"><a href="#">inspect</a> <kbd>⌘R</kbd></span>
+              </div>
+              <div class="cardBody">
+                <div class="pillRow">
+                  <span class="chunkPill">codebase_rag/chat.py:248-286 <span class="s">0.84</span></span>
+                  <span class="chunkPill">codebase_rag/tools.py:1-44 <span class="s">0.79</span></span>
+                  <span class="chunkPill">codebase_rag/chat.py:189-225 <span class="s">0.71</span></span>
+                  <span class="chunkPill">codebase_rag/tools.py:512-538 <span class="s">0.66</span></span>
+                  <span class="chunkPill ref">refs/anthropic-docs · prompt-injection.md <span class="s">0.59</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="answer">
+              <p>Every external string that re-enters the model — retrieved chunks, <code>read_file</code> results,
+              <code>grep</code> matches, web fetches, shell stdout — is wrapped in
+              <code>&lt;&lt;&lt;UNTRUSTED-BEGIN&gt;&gt;&gt; … &lt;&lt;&lt;UNTRUSTED-END&gt;&gt;&gt;</code> markers
+              before being concatenated into the prompt.</p>
+              <p>The system prompt tells the model to treat anything between those markers as <i>data</i>, not instructions.
+              The wrap happens in <code>format_context()</code> at <code>codebase_rag/chat.py:286</code>; tool results
+              add the same markers in <code>tools.py</code>.</p>
+            </div>
+
+            <div class="card tool">
+              <div class="cardHead">
+                <span class="icon">⛁</span><span class="t">read_file</span>
+                <span style="color:var(--fg-2)">·  codebase_rag/chat.py</span>
+                <span class="right"><span style="color:var(--ok)">ok</span> · 1018 lines · 38ms · <a href="#">view</a></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="user">
+              <div class="ava">&gt;</div>
+              <div class="body">add a one-line docstring to <code style="color:var(--accent);font-family:var(--mono)">format_context</code> explaining the markers</div>
+            </div>
+            <div class="meta"><span>retrieve: <b>3 chunks</b></span><span>·</span><span><b>0.9s</b></span></div>
+
+            <div class="card edit">
+              <div class="cardHead">
+                <span class="icon">✎</span><span class="t">edit_file</span>
+                <span style="color:var(--fg-2)">·  codebase_rag/chat.py</span>
+                <span class="right" style="color:var(--warn)">pending approval</span>
+              </div>
+              <div class="cardBody">
+                <div class="diff" aria-label="proposed diff">
+                  <div class="h">@@ codebase_rag/chat.py · format_context @@</div>
+                  <div class="ctx"> def format_context(chunks: list[dict], pinned: list[dict] | None = None) -&gt; str:</div>
+                  <div class="minus">-    """Render context for a user turn.</div>
+                  <div class="plus">+    """Render context for a user turn. Wraps the whole block in UNTRUSTED markers so the</div>
+                  <div class="plus">+    model treats retrieved code as data, not instructions.</div>
+                  <div class="ctx">     Order: pinned files (full content), project chunks (retrieved), reference chunks.</div>
+                  <div class="ctx">     """</div>
+                </div>
+                <div class="btnRow">
+                  <button class="btn primary">Approve <span class="k">a</span></button>
+                  <button class="btn danger">Reject <span class="k">r</span></button>
+                  <button class="btn">Edit <span class="k">e</span></button>
+                  <button class="btn">Why? (show retrieval)</button>
+                </div>
+              </div>
+            </div>
+            <div class="answer stream" style="margin-left:34px">I&#39;ll add a docstring clarifying the UNTRUSTED-wrapping contract</div>
+          </div>
+
+        </div>
+
+        <!-- composer -->
+        <div class="composer" aria-label="Composer">
+          <div class="pinned">
+            <span class="chip"><span style="color:var(--accent)">📎</span> codebase_rag/chat.py <span class="x" aria-label="unpin">×</span></span>
+            <span class="chip"><span style="color:var(--accent)">📎</span> codebase_rag/tools.py <span class="x" aria-label="unpin">×</span></span>
+            <span class="chip" style="border-style:dashed;color:var(--fg-2);cursor:pointer">+ pin a file</span>
+          </div>
+          <div class="row">
+            <textarea aria-label="message input" placeholder="ask anything — type / for slash commands · ⌘↵ to send"></textarea>
+            <div class="tools">
+              <button class="iconbtn" title="attach pin" aria-label="attach">📎</button>
+              <button class="iconbtn" title="slash commands" aria-label="slash">/</button>
+              <button class="send">send ⌘↵</button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- right rail -->
+      <aside class="col right" aria-label="Context">
+        <div class="colHead">Context</div>
+        <div class="colBody">
+          <div class="rcard">
+            <div class="h"><span>Pinned</span><b>2 files · 57 KB</b></div>
+            <div class="b">
+              <div class="pin"><span>codebase_rag/chat.py</span><span class="size">35 KB</span></div>
+              <div class="pin"><span>codebase_rag/tools.py</span><span class="size">22 KB</span></div>
+            </div>
+          </div>
+
+          <div class="rcard">
+            <div class="h"><span>References</span><b>2</b></div>
+            <div class="b" style="display:flex;flex-direction:column;gap:4px">
+              <span style="color:var(--purple);font-family:var(--mono);font-size:12px">› anthropic-docs (1.4k)</span>
+              <span style="color:var(--purple);font-family:var(--mono);font-size:12px">› chromadb-readme (0.3k)</span>
+            </div>
+          </div>
+
+          <div class="rcard">
+            <div class="h"><span>Project notes</span><a href="#" style="font-family:var(--mono);text-transform:none;letter-spacing:0;color:var(--fg-2)">edit</a></div>
+            <div class="b" style="color:var(--fg-1);font-family:var(--mono);font-size:12px">
+              Local-first. Anthropic is the only cloud provider. No <code style="color:var(--accent)">rich</code> dep without weighing.
+            </div>
+          </div>
+
+          <div class="rcard">
+            <div class="h"><span>Model · provider</span><b>local</b></div>
+            <div class="b modelbox">
+              <div class="row"><span>chat</span><span>qwen2.5-coder:7b</span></div>
+              <div class="row"><span>embed</span><span>nomic-embed-text</span></div>
+              <div class="row"><span>provider</span><span>ollama</span></div>
+              <div class="row"><span>ctx</span><span>65536</span></div>
+            </div>
+          </div>
+
+          <div class="rcard">
+            <div class="h"><span>Git</span><b>main</b></div>
+            <div class="b gitbox">
+              <span class="b" style="color:var(--accent)">●</span> main · <span class="dirty">2 dirty</span>
+              <span class="f">codebase_rag/chat.py</span>
+              <span class="f">codebase_rag/tools.py</span>
+              <div style="margin-top:8px"><a href="#">:diff</a> · <a href="#">:commit</a> · <a href="#">:undo</a></div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- SCENE: TOOL GATE + CONFIRM -->
+  <div class="scene" data-scene="confirm" hidden>
+    <div class="grid">
+      <aside class="col nav" aria-hidden="true"><div class="colBody" style="opacity:.45"></div></aside>
+      <main class="col convo" aria-label="Conversation">
+        <div class="chat">
+          <div class="turn">
+            <div class="user">
+              <div class="ava">&gt;</div>
+              <div class="body">run the tests for the retrieval module</div>
+            </div>
+            <div class="meta"><span>retrieve: <b>2 chunks</b></span><span>·</span><span>0.8s</span></div>
+
+            <div class="card shell">
+              <div class="cardHead">
+                <span class="icon">▶</span><span class="t">run_shell</span>
+                <span style="color:var(--fg-2)">·  runner: host · network: none · timeout: 30s</span>
+                <span class="right" style="color:var(--warn)">pending approval</span>
+              </div>
+              <div class="cardBody">
+                <div class="diff" aria-label="proposed command">
+                  <div style="color:var(--accent)">$ pytest -k test_retrieve -q</div>
+                </div>
+                <p style="color:var(--fg-2);font-size:11px;margin:10px 0 0;font-family:var(--mono)">
+                  Runs on your <b style="color:var(--fg-0)">host</b> with codebase-rag's permissions. Network is off.
+                  Declining returns <code style="color:var(--accent)">ok:false</code> to the model so it can recover.
+                </p>
+                <div class="btnRow">
+                  <button class="btn primary">Run <span class="k">y</span></button>
+                  <button class="btn">Edit command <span class="k">e</span></button>
+                  <button class="btn danger">Decline <span class="k">N</span></button>
+                  <label style="display:inline-flex;align-items:center;gap:6px;color:var(--fg-2);font-family:var(--mono);font-size:11px;margin-left:6px">
+                    <input type="checkbox" /> trust run_shell for this session
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="card declined">
+              <div class="cardHead">
+                <span class="icon">⊘</span><span class="t">run_shell</span>
+                <span style="color:var(--fg-2)">·  rm -rf node_modules</span>
+                <span class="right" style="color:var(--danger)">declined by user</span>
+              </div>
+              <div class="cardBody" style="color:var(--fg-2);font-family:var(--mono);font-size:11px">
+                Returned <code style="color:var(--danger)">{"ok": false, "error": "user declined to run_shell"}</code> to the model.
+              </div>
+            </div>
+
+            <div class="card approved">
+              <div class="cardHead">
+                <span class="icon">✓</span><span class="t">edit_file</span>
+                <span style="color:var(--fg-2)">·  codebase_rag/chat.py · 2m ago</span>
+                <span class="right" style="color:var(--ok)">approved · 1 hunk · 0.19s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer">
+          <div class="row">
+            <textarea aria-label="message input" placeholder="…"></textarea>
+            <div class="tools"><button class="send">send ⌘↵</button></div>
+          </div>
+        </div>
+      </main>
+      <aside class="col right" aria-hidden="true"><div class="colHead">Context</div><div class="colBody" style="opacity:.45"></div></aside>
+    </div>
+  </div>
+
+  <!-- SCENE: SHIELD DRAWER -->
+  <div class="scene" data-scene="shield" hidden style="position:relative">
+    <div class="grid">
+      <aside class="col nav" aria-hidden="true"><div class="colBody" style="opacity:.45"></div></aside>
+      <main class="col convo" aria-hidden="true"><div class="chat" style="opacity:.45"></div></main>
+      <aside class="col right" aria-hidden="true"><div class="colBody" style="opacity:.45"></div></aside>
+    </div>
+    <div class="shieldDrawer" role="dialog" aria-label="Network shield">
+      <button class="closeBtn" aria-label="close">×</button>
+      <h2>Network shield</h2>
+      <div class="desc">What's leaving your machine right now — and how to lock it down further.</div>
+
+      <div class="sH">Currently exposed</div>
+      <div class="row2">
+        <div class="l"><b>None</b><span>This session has used no network destinations.</span></div>
+        <span class="pillDot ok" style="width:10px;height:10px"></span>
+      </div>
+
+      <div class="sH">Session flags</div>
+      <div class="row2"><div class="l"><b>--read-only</b><span>disable write_file + edit_file</span></div><span class="gate" role="switch" aria-checked="false"><span class="switch"></span></span></div>
+      <div class="row2"><div class="l"><b>--confirm-writes</b><span>every write/edit asks first</span></div><span class="gate warn" role="switch" aria-checked="true"><span class="switch"></span></span></div>
+      <div class="row2"><div class="l"><b>--allow-shell</b><span>off · model can't request run_shell</span></div><span class="gate warn" role="switch" aria-checked="false"><span class="switch"></span></span></div>
+      <div class="row2"><div class="l"><b>--allow-web</b><span>off · no web_search / web_fetch</span></div><span class="gate danger" role="switch" aria-checked="false"><span class="switch"></span></span></div>
+
+      <div class="sH">Provider</div>
+      <div class="row2">
+        <div class="l"><b>ollama (local)</b><span>chat &amp; embedding stay on this machine</span></div>
+        <span class="pillDot ok" style="width:10px;height:10px"></span>
+      </div>
+      <div class="row2" style="opacity:.7">
+        <div class="l"><b style="color:var(--danger)">anthropic</b><span>messages, retrieved chunks, tool args → api.anthropic.com</span></div>
+        <span class="pillDot danger" style="width:10px;height:10px"></span>
+      </div>
+
+      <div class="sH">Web allowlist (when --allow-web)</div>
+      <div class="row2" style="padding:6px 12px"><span style="color:var(--fg-2)">empty — any host allowed</span><a href="#">edit</a></div>
+
+      <div class="sH">Last 5 events</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--fg-1);background:var(--bg-2);border:1px solid var(--border-soft);border-radius:6px;padding:8px 12px">
+        <div>17:42:07 <span style="color:var(--purple)">tool_call</span> edit_file</div>
+        <div>17:42:01 <span style="color:var(--purple)">tool_call</span> read_file</div>
+        <div>17:41:58 <span style="color:var(--accent)">slash</span> :add codebase_rag/chat.py</div>
+        <div>17:41:55 <span style="color:var(--danger)">declined</span> run_shell rm -rf node_modules</div>
+        <div>17:41:42 <span>session_start</span></div>
+        <div style="margin-top:6px"><a href="#">Open audit log →</a></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: INDEXING -->
+  <div class="scene" data-scene="index" hidden>
+    <div class="indexView">
+      <h2>Index</h2>
+      <div class="desc">Per-project ChromaDB collections at <code style="color:var(--accent)">~/.codebase-rag/meta/&lt;sha&gt;/</code> · nothing in the repo · all-local embedding.</div>
+
+      <div class="toolbar">
+        <input value="" placeholder="filter projects…" aria-label="filter projects" />
+        <select aria-label="sort"><option>last activity</option><option>name</option><option>chunks</option></select>
+        <button class="btn">+ index a directory</button>
+        <button class="btn">+ add references</button>
+      </div>
+
+      <table class="projTable" aria-label="indexed projects">
+        <thead><tr>
+          <th>name</th><th>chunks</th><th>refs</th><th>last indexed</th><th>staleness</th><th>collection</th><th></th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td class="name">codebase-rag</td>
+            <td class="num">4,231</td>
+            <td class="num">2</td>
+            <td>17:42 today</td>
+            <td class="stale">2 stale</td>
+            <td style="color:var(--fg-2)">cbr_codebase-rag_a8c41f</td>
+            <td><div class="actions"><button>open</button><button>reindex</button><button>⋯</button></div></td>
+          </tr>
+          <tr>
+            <td class="name">marketing-site</td>
+            <td class="num">312</td>
+            <td class="num">0</td>
+            <td>3 days ago</td>
+            <td class="ok">fresh</td>
+            <td style="color:var(--fg-2)">cbr_marketing-site_72d9c1</td>
+            <td><div class="actions"><button>open</button><button>reindex</button><button>⋯</button></div></td>
+          </tr>
+          <tr>
+            <td class="name">infra/terraform</td>
+            <td class="num">1,123</td>
+            <td class="num">1</td>
+            <td>2 weeks ago</td>
+            <td class="stale">47 stale</td>
+            <td style="color:var(--fg-2)">cbr_infra-terraform_5e02af</td>
+            <td><div class="actions"><button>open</button><button>reindex</button><button>⋯</button></div></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="indexNow" role="region" aria-label="active index job">
+        <div class="h">
+          <span>indexing <b style="color:var(--accent)">codebase-rag</b> · chunking <code style="color:var(--accent)">codebase_rag/chat.py</code></span>
+          <span class="right"><b style="color:var(--fg-0)">682</b> / 1004 files · 286 chunks/s · eta 14s</span>
+        </div>
+        <div class="bar" role="progressbar" aria-valuenow="68" aria-valuemin="0" aria-valuemax="100"><i style="width:68%"></i></div>
+        <div class="logBox" aria-live="polite">
+          <div class="ln"><span class="ts">17:42:03.121</span><span style="color:var(--ok)">✓</span> indexed 12 files in <code style="color:var(--accent)">codebase_rag/</code> · 142 chunks</div>
+          <div class="ln"><span class="ts">17:42:03.488</span><span style="color:var(--info)">·</span> respected .codebaseragignore: skipped <code>.venv/</code>, <code>node_modules/</code></div>
+          <div class="ln"><span class="ts">17:42:04.011</span><span style="color:var(--fg-dim)">↷</span> skipped assets/screencast.gif (binary)</div>
+          <div class="ln"><span class="ts">17:42:04.207</span><span style="color:var(--warn)">!</span> large file design/SPEC.md (47 KB) — split into 18 chunks</div>
+          <div class="ln"><span class="ts">17:42:04.901</span><span style="color:var(--info)">·</span> upsert → cbr_codebase-rag_a8c41f · 4,189 total</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: AUDIT -->
+  <div class="scene" data-scene="audit" hidden>
+    <div class="auditView">
+      <div class="auditBar">
+        <h2>Audit log</h2>
+        <span class="auditChip on">project: <b>codebase-rag</b></span>
+        <span class="auditChip">session: <b>a8c41f6e</b></span>
+        <span class="auditChip">tool: <b>any</b></span>
+        <span class="auditChip">event: <b>any</b></span>
+        <span class="auditChip">since: <b>today</b></span>
+        <span class="right">
+          <span>312 events</span><span style="color:var(--fg-dim)">·</span>
+          <a href="#">export NDJSON</a>
+        </span>
+      </div>
+      <div class="auditList" role="list">
+        <div class="ev"><span class="ts">17:42:07.398</span><span class="kind toolresult">tool_result</span><span class="body"><b>edit_file</b> → <span class="ok">ok:true</span> · path: codebase_rag/chat.py · 1 hunk applied</span><span class="dur">0.19s</span></div>
+        <div class="ev"><span class="ts">17:42:07.211</span><span class="kind toolcall">tool_call</span><span class="body"><b>edit_file</b>(<span class="arg">path</span>="codebase_rag/chat.py", <span class="arg">old_string</span>="…", <span class="arg">new_string</span>="…")</span><span class="dur"></span></div>
+        <div class="ev"><span class="ts">17:42:01.084</span><span class="kind toolresult">tool_result</span><span class="body"><b>read_file</b> → <span class="ok">ok:true</span> · 1018 lines · 35 KB</span><span class="dur">38ms</span></div>
+        <div class="ev"><span class="ts">17:42:01.046</span><span class="kind toolcall">tool_call</span><span class="body"><b>read_file</b>(<span class="arg">path</span>="codebase_rag/chat.py")</span><span class="dur"></span></div>
+        <div class="ev"><span class="ts">17:41:58.512</span><span class="kind toolresult">tool_result</span><span class="body"><b>grep</b> → <span class="ok">ok:true</span> · match_count: <b>7</b></span><span class="dur">11ms</span></div>
+        <div class="ev"><span class="ts">17:41:58.502</span><span class="kind slash">slash</span><span class="body">:add codebase_rag/chat.py · <span class="ok">pinned</span></span><span class="dur"></span></div>
+        <div class="ev"><span class="ts">17:41:58.501</span><span class="kind toolcall">tool_call</span><span class="body"><b>grep</b>(<span class="arg">pattern</span>="UNTRUSTED_BEGIN", <span class="arg">literal</span>=true)</span><span class="dur"></span></div>
+        <div class="ev"><span class="ts">17:41:55.882</span><span class="kind declined">declined</span><span class="body"><b>run_shell</b>(<span class="arg">command</span>="rm -rf node_modules") → <span class="err">user declined</span></span><span class="dur"></span></div>
+        <div class="ev"><span class="ts">17:41:42.301</span><span class="kind session">session_start</span><span class="body">provider=<b>ollama</b> · model=<b>qwen2.5-coder:7b</b> · read_only=false · allow_shell=true · allow_web=false</span><span class="dur"></span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const buttons = document.querySelectorAll('.sceneBar button[data-scene]');
+  const scenes  = document.querySelectorAll('.scene[data-scene]');
+  function show(name){
+    buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
+    scenes.forEach(s => s.hidden = (s.dataset.scene !== name));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => show(b.dataset.scene)));
+  // gate toggles — pure visual; updates aria-checked
+  document.querySelectorAll('[role="switch"]').forEach(sw => {
+    sw.addEventListener('click', () => {
+      const v = sw.getAttribute('aria-checked') === 'true';
+      sw.setAttribute('aria-checked', String(!v));
+    });
+    sw.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); sw.click(); }
+    });
+  });
+  document.querySelector('.sceneBar').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const list = [...buttons];
+    const cur = list.findIndex(b => b.getAttribute('aria-pressed') === 'true');
+    const next = e.key === 'ArrowRight' ? (cur+1)%list.length : (cur-1+list.length)%list.length;
+    list[next].focus(); show(list[next].dataset.scene);
+  });
+</script>
+
+</body>
+</html>

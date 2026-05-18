@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codebase-rag — TUI mockup</title>
+<style>
+  :root {
+    --bg-0:#0b0d10; --bg-1:#11141a; --bg-2:#181c24; --bg-3:#232834;
+    --border:#2a3140; --border-soft:#1c2230;
+    --fg-0:#e6e9ef; --fg-1:#a7b0bf; --fg-2:#6b7484; --fg-dim:#4a5263;
+    --accent:#7aa2f7; --accent-soft:#29406b;
+    --ok:#9ece6a; --warn:#e0af68; --danger:#f7768e; --info:#7dcfff; --purple:#bb9af7;
+    --mono: "JetBrains Mono", ui-monospace, SF Mono, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--fg-0);font-family:var(--mono);font-size:13px;line-height:1.5}
+  body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+  .page{width:min(1180px,100%);}
+  .pageHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;font-family:Inter,system-ui,sans-serif}
+  .pageHead h1{margin:0;font-size:18px;font-weight:600;color:var(--fg-0)}
+  .pageHead .sub{color:var(--fg-2);font-size:13px}
+  .pageHead a{color:var(--accent);text-decoration:none;margin-left:16px;font-size:13px}
+  .pageHead a:hover{text-decoration:underline}
+  .term{background:var(--bg-0);border:1px solid var(--border);border-radius:8px;overflow:hidden;box-shadow:0 16px 40px rgba(0,0,0,.5)}
+  .termChrome{display:flex;align-items:center;gap:8px;padding:10px 14px;background:#0f1217;border-bottom:1px solid var(--border)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .dot.r{background:#ff5f57}.dot.y{background:#febc2e}.dot.g{background:#28c840}
+  .termTitle{margin-left:8px;color:var(--fg-2);font-size:12px}
+  .screen{display:grid;grid-template-rows:auto 1fr auto auto;height:720px}
+  .topbar{display:flex;align-items:center;gap:14px;padding:8px 14px;background:var(--bg-1);border-bottom:1px solid var(--border-soft);font-size:12px;color:var(--fg-1)}
+  .topbar .pill{display:inline-flex;align-items:center;gap:6px}
+  .pillDot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .pillDot.ok{background:var(--ok)}.pillDot.warn{background:var(--warn)}.pillDot.danger{background:var(--danger)}
+  .sep{color:var(--fg-dim)}
+  .topbar .right{margin-left:auto;color:var(--fg-2)}
+
+  .body{display:grid;grid-template-columns:200px 1fr 220px;min-height:0}
+  .pane{padding:10px 12px;overflow-y:auto;border-right:1px solid var(--border-soft)}
+  .pane:last-child{border-right:none}
+  .paneTitle{color:var(--fg-2);text-transform:uppercase;letter-spacing:.08em;font-size:10px;margin:0 0 8px}
+
+  .proj{padding:6px 8px;border-radius:4px;cursor:pointer;margin-bottom:2px}
+  .proj.active{background:var(--accent-soft);color:var(--fg-0)}
+  .proj .name{color:var(--fg-0)}
+  .proj.active .name{color:var(--fg-0)}
+  .proj .meta{color:var(--fg-2);font-size:11px}
+  .proj:hover:not(.active){background:var(--bg-2)}
+  .indexBtn{margin-top:10px;width:100%;text-align:left;background:transparent;color:var(--accent);border:1px dashed var(--border);border-radius:4px;padding:6px 8px;cursor:pointer;font-family:inherit;font-size:12px}
+  .indexBtn:hover{background:var(--bg-2)}
+
+  .chat{padding:14px 18px;overflow-y:auto;background:var(--bg-0)}
+  .turn{margin-bottom:18px}
+  .user{color:var(--fg-0)}
+  .user::before{content:"> ";color:var(--accent)}
+  .card{border:1px solid var(--border-soft);border-radius:4px;padding:8px 10px;margin:8px 0;background:var(--bg-1)}
+  .card.retrieval{border-left:2px solid var(--info)}
+  .card.tool{border-left:2px solid var(--purple)}
+  .card.edit{border-left:2px solid var(--warn);background:rgba(224,175,104,.06)}
+  .card.edit.approved{border-left-color:var(--ok);background:rgba(158,206,106,.06)}
+  .cardHead{display:flex;align-items:center;gap:8px;color:var(--fg-1);font-size:12px}
+  .cardHead .icon{color:var(--info)}
+  .card.tool .cardHead .icon{color:var(--purple)}
+  .card.edit .cardHead .icon{color:var(--warn)}
+  .card.edit.approved .cardHead .icon{color:var(--ok)}
+  .score{color:var(--fg-2);margin-left:8px}
+  .chunk{display:flex;justify-content:space-between;padding:2px 0;color:var(--fg-1)}
+  .chunk .path{color:var(--info)}
+  .chunk .score{color:var(--fg-2)}
+  .answer{color:var(--fg-0);padding:6px 0 0}
+  .answer code{color:var(--accent)}
+  .diff{font-family:var(--mono);font-size:12px;line-height:1.5;margin-top:6px}
+  .diff .minus{color:var(--danger)}
+  .diff .plus{color:var(--ok)}
+  .diff .ctx{color:var(--fg-2)}
+  .approveBar{margin-top:8px;color:var(--fg-2);font-size:12px}
+  .approveBar .key{color:var(--fg-0);background:var(--bg-3);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:6px}
+  .approveBar .key.ok{color:var(--ok);border-color:rgba(158,206,106,.3)}
+  .approveBar .key.no{color:var(--danger);border-color:rgba(247,118,142,.3)}
+
+  .ctxBlock{margin-bottom:14px}
+  .ctxBlock .h{display:flex;justify-content:space-between;color:var(--fg-2);font-size:11px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+  .ctxBlock .count{color:var(--fg-dim)}
+  .ctxBlock .item{color:var(--fg-1);padding:2px 0;display:flex;justify-content:space-between}
+  .ctxBlock .item .x{color:var(--fg-dim);cursor:pointer}
+  .ctxBlock .item .x:hover{color:var(--danger)}
+  .ctxBlock.git .item{color:var(--ok)}
+
+  .composer{display:flex;align-items:flex-start;padding:8px 14px;background:var(--bg-1);border-top:1px solid var(--border-soft)}
+  .composer .prompt{color:var(--accent);margin-right:6px}
+  .composer .field{flex:1;color:var(--fg-0);outline:none}
+  .composer .cursor{display:inline-block;width:7px;height:15px;background:var(--fg-0);vertical-align:middle;margin-left:1px;animation:blink 1s steps(2) infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  .keys{padding:6px 14px;background:var(--bg-1);border-top:1px solid var(--border-soft);color:var(--fg-2);font-size:11px;display:flex;gap:14px;justify-content:flex-start;flex-wrap:wrap}
+  .keys .kb{color:var(--fg-1)}
+  .keys .kb b{color:var(--accent);font-weight:600;margin-right:4px}
+  .keys .right{margin-left:auto;color:var(--fg-dim)}
+
+  /* slash picker */
+  .picker{position:absolute;background:var(--bg-2);border:1px solid var(--border);border-radius:4px;padding:4px 0;min-width:280px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:5}
+  .picker .row{display:flex;justify-content:space-between;padding:5px 10px;color:var(--fg-1);cursor:pointer}
+  .picker .row.sel{background:var(--accent-soft);color:var(--fg-0)}
+  .picker .row .cmd{color:var(--accent)}
+  .picker .row .desc{color:var(--fg-2);font-size:11px;margin-left:10px}
+
+  /* shield overlay */
+  .shieldPanel{position:absolute;top:42px;left:14px;background:var(--bg-2);border:1px solid var(--border);border-radius:4px;padding:12px 14px;min-width:360px;box-shadow:0 12px 30px rgba(0,0,0,.6);display:none;z-index:6}
+  .shieldPanel.open{display:block}
+  .shieldPanel h4{margin:0 0 8px;color:var(--fg-0);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+  .shieldPanel p{margin:0 0 10px;color:var(--fg-1);font-size:12px;line-height:1.6}
+  .shieldRow{display:flex;justify-content:space-between;padding:4px 0;font-size:12px;color:var(--fg-1)}
+  .shieldRow .v{color:var(--ok)}
+  .shieldRow.warn .v{color:var(--warn)}
+  .shieldRow.off .v{color:var(--fg-dim)}
+
+  .hint{position:absolute;top:50%;right:24px;transform:translateY(-50%);background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;color:var(--fg-1);font-size:12px;max-width:240px;display:none}
+  .pageHead .legend{font-family:Inter,system-ui,sans-serif;color:var(--fg-2);font-size:12px;margin-top:6px}
+  .legend .k{color:var(--fg-1);background:var(--bg-2);border:1px solid var(--border);border-radius:3px;padding:1px 6px;font-family:var(--mono);font-size:11px;margin:0 4px}
+  .term{position:relative}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pageHead">
+    <div>
+      <h1>codebase-rag — TUI (Textual) mockup</h1>
+      <div class="sub">Full-screen terminal UI launched by <code style="font-family:var(--mono)">codebase-rag chat</code>. Same product as browser/desktop, terminal-native.</div>
+      <div class="legend">Try: <span class="k">s</span> shield · <span class="k">/</span> slash picker · <span class="k">a</span> approve pending edit · <span class="k">?</span> hint</div>
+    </div>
+    <div>
+      <a href="index.html">← back to index</a>
+      <a href="browser.html">browser/desktop →</a>
+    </div>
+  </div>
+
+  <div class="term" id="term">
+    <div class="termChrome">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="termTitle">~/code/my-app — codebase-rag chat</span>
+    </div>
+
+    <div class="screen">
+      <!-- topbar / shield -->
+      <div class="topbar">
+        <span class="pill" title="Click to open the shield panel" id="shieldBtn" style="cursor:pointer">
+          <span class="pillDot ok" id="postureDot"></span><b id="postureLabel" style="color:var(--ok)">Local</b>
+        </span>
+        <span class="sep">·</span>
+        <span>mistral-nemo</span>
+        <span class="sep">·</span>
+        <span>read+write</span>
+        <span class="sep">·</span>
+        <span>shell: <span style="color:var(--fg-dim)">off</span></span>
+        <span class="sep">·</span>
+        <span>web: <span style="color:var(--fg-dim)">off</span></span>
+        <span class="sep">·</span>
+        <span>4,231 chunks</span>
+        <span class="right">session 3f8c · 14:22</span>
+      </div>
+
+      <div class="body">
+        <!-- projects -->
+        <aside class="pane">
+          <h3 class="paneTitle">Projects</h3>
+          <div class="proj active">
+            <div class="name">● my-app</div>
+            <div class="meta">312 ch · refs: 1</div>
+          </div>
+          <div class="proj">
+            <div class="name">  other-project</div>
+            <div class="meta">1,142 ch</div>
+          </div>
+          <div class="proj">
+            <div class="name">  scratch</div>
+            <div class="meta">86 ch</div>
+          </div>
+          <button class="indexBtn">[+] index a folder</button>
+
+          <h3 class="paneTitle" style="margin-top:18px">Hot keys</h3>
+          <div style="color:var(--fg-2);font-size:11px;line-height:1.7">
+            ^P projects<br>^R retrieval<br>^L audit<br>^K command palette<br>? help overlay
+          </div>
+        </aside>
+
+        <!-- conversation -->
+        <main class="chat" id="chat">
+          <div class="turn">
+            <div class="user">how does the auth middleware work?</div>
+
+            <div class="card retrieval">
+              <div class="cardHead"><span class="icon">⟢</span> retrieved 5 chunks · 124 ms <span class="score" style="margin-left:auto">press <b style="color:var(--fg-0)">r</b> to expand</span></div>
+              <div style="margin-top:6px">
+                <div class="chunk"><span class="path">src/middleware/auth.ts:1-48</span><span class="score">0.82</span></div>
+                <div class="chunk"><span class="path">src/middleware/auth.ts:48-94</span><span class="score">0.79</span></div>
+                <div class="chunk"><span class="path">src/lib/jwt.ts:12-44</span><span class="score">0.71</span></div>
+                <div class="chunk"><span class="path">src/routes/api.ts:1-22</span><span class="score">0.64</span></div>
+                <div class="chunk"><span class="path">tests/auth.test.ts:14-58</span><span class="score">0.61</span></div>
+              </div>
+            </div>
+
+            <div class="answer">
+              <div>▸ The auth middleware verifies JWT tokens on every request to <code>/api/*</code>. It</div>
+              <div>&nbsp;&nbsp;reads the token from the <code>session</code> cookie via <code>getToken()</code>, then calls</div>
+              <div>&nbsp;&nbsp;<code>verifyToken</code> (from <code>src/lib/jwt.ts</code>) with the configured secret. On failure</div>
+              <div>&nbsp;&nbsp;it returns 401 immediately. On success it attaches <code>req.user</code> and continues.</div>
+            </div>
+
+            <div class="card tool">
+              <div class="cardHead"><span class="icon">─</span> tool: read_file(src/middleware/auth.ts) <span class="score" style="margin-left:auto">230 lines · ok</span></div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="user">add a JSDoc to verifyToken explaining what it returns on failure</div>
+
+            <div class="card edit" id="editCard">
+              <div class="cardHead"><span class="icon">✎</span> wants to edit <b style="color:var(--fg-0)">src/middleware/auth.ts</b></div>
+              <div class="diff">
+                <div class="ctx">@@ line 41 @@</div>
+                <div class="ctx">&nbsp;&nbsp;import { jwtVerify } from "jose";</div>
+                <div class="ctx">&nbsp;</div>
+                <div class="minus">- export function verifyToken(req: Request) {</div>
+                <div class="plus">+ /**</div>
+                <div class="plus">+ &nbsp;* Verify a JWT pulled from req cookies.</div>
+                <div class="plus">+ &nbsp;* @returns the decoded payload, or `null` if the token is</div>
+                <div class="plus">+ &nbsp;*   missing, expired, or fails signature verification.</div>
+                <div class="plus">+ &nbsp;*/</div>
+                <div class="plus">+ export function verifyToken(req: Request) {</div>
+                <div class="ctx">&nbsp;&nbsp;const token = getToken(req);</div>
+              </div>
+              <div class="approveBar">
+                <span class="key ok">a</span>approve
+                <span class="key no">r</span>reject
+                <span class="key">e</span>edit
+                <span class="key">d</span>full diff
+                <span style="color:var(--fg-dim);margin-left:8px" id="editStatus"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="turn" id="afterTurn" style="display:none">
+            <div style="color:var(--fg-2);font-size:12px;padding:4px 0">↻ src/middleware/auth.ts re-indexed (47 chunks → 48)</div>
+          </div>
+        </main>
+
+        <!-- context -->
+        <aside class="pane">
+          <div class="ctxBlock">
+            <div class="h"><span>Pinned</span><span class="count">2</span></div>
+            <div class="item"><span>src/auth.ts</span><span class="x" title=":drop">×</span></div>
+            <div class="item"><span>src/mw.ts</span><span class="x" title=":drop">×</span></div>
+          </div>
+          <div class="ctxBlock">
+            <div class="h"><span>References</span><span class="count">1</span></div>
+            <div class="item" style="color:var(--info)">api-spec <span style="color:var(--fg-dim)">· 412 ch</span></div>
+          </div>
+          <div class="ctxBlock">
+            <div class="h"><span>Notes</span><span class="count" style="cursor:pointer;color:var(--accent)">edit</span></div>
+            <div style="color:var(--fg-1);font-size:12px;line-height:1.55">React + Vite app, Postgres, snake_case in DB. Avoid touching legacy/v1.</div>
+          </div>
+          <div class="ctxBlock git">
+            <div class="h" style="color:var(--fg-2)"><span>Git</span><span class="count" style="color:var(--fg-dim)">main</span></div>
+            <div class="item" style="color:var(--warn)">2 dirty (uncommitted)</div>
+            <div class="item" style="color:var(--info)">last: a3f8b1 chore: lint</div>
+          </div>
+        </aside>
+      </div>
+
+      <!-- composer -->
+      <div class="composer">
+        <span class="prompt">&gt;</span>
+        <span class="field" id="field"></span><span class="cursor"></span>
+      </div>
+
+      <!-- key hints -->
+      <div class="keys">
+        <span class="kb"><b>^P</b>projects</span>
+        <span class="kb"><b>^R</b>retrieval</span>
+        <span class="kb"><b>^L</b>audit</span>
+        <span class="kb"><b>^K</b>cmd palette</span>
+        <span class="kb"><b>/</b>slash</span>
+        <span class="kb"><b>?</b>help</span>
+        <span class="right">⌥+↵ send</span>
+      </div>
+    </div>
+
+    <!-- shield panel -->
+    <div class="shieldPanel" id="shield">
+      <h4>Network surface · what's leaving this machine</h4>
+      <p style="color:var(--fg-1)">Nothing right now. Chat goes to your local Ollama daemon at <code style="font-family:var(--mono)">127.0.0.1:11434</code>; embeddings stay local.</p>
+      <div class="shieldRow"><span>chat provider</span><span class="v">ollama (local)</span></div>
+      <div class="shieldRow off"><span>web search/fetch</span><span class="v">off</span></div>
+      <div class="shieldRow off"><span>shell tool</span><span class="v">off</span></div>
+      <div class="shieldRow"><span>write/edit</span><span class="v">enabled (no confirm)</span></div>
+      <div style="margin-top:10px;color:var(--fg-2);font-size:11px">Toggle posture in settings or pass flags at launch (<code>--allow-web</code>, <code>--allow-shell</code>, <code>--read-only</code>).</div>
+    </div>
+
+    <!-- slash picker -->
+    <div class="picker" id="picker" style="display:none;bottom:62px;left:218px">
+      <div class="row sel"><span><span class="cmd">:add</span> &lt;path|glob&gt;</span><span class="desc">pin file into every turn</span></div>
+      <div class="row"><span><span class="cmd">:drop</span> &lt;path|glob&gt;</span><span class="desc">unpin</span></div>
+      <div class="row"><span><span class="cmd">:pinned</span></span><span class="desc">list current pins</span></div>
+      <div class="row"><span><span class="cmd">:diff</span> [path]</span><span class="desc">show pending diff</span></div>
+      <div class="row"><span><span class="cmd">:commit</span> [msg]</span><span class="desc">stage touched files, prompt</span></div>
+      <div class="row"><span><span class="cmd">:undo</span></span><span class="desc">revert last [codebase-rag] commit</span></div>
+      <div class="row"><span><span class="cmd">:search</span> &lt;q&gt;</span><span class="desc">web search (needs --allow-web)</span></div>
+      <div class="row"><span><span class="cmd">:fetch</span> &lt;url&gt;</span><span class="desc">fetch URL (needs --allow-web)</span></div>
+      <div class="row"><span><span class="cmd">:run</span> &lt;cmd&gt;</span><span class="desc">run shell (needs --allow-shell)</span></div>
+      <div class="row"><span><span class="cmd">:reset</span> / <span class="cmd">:forget</span></span><span class="desc">clear history / delete saved</span></div>
+    </div>
+
+    <div class="hint" id="hint">
+      <b style="color:var(--fg-0)">Help</b><br>
+      <span class="kb">a</span> approve pending edit · <span class="kb">r</span> reject · <span class="kb">e</span> open in $EDITOR<br>
+      <span class="kb">s</span> shield · <span class="kb">/</span> slash picker · <span class="kb">esc</span> close overlays
+      <style scoped>.hint .kb{color:var(--accent);font-weight:600;margin-right:4px}</style>
+    </div>
+  </div>
+</div>
+
+<script>
+  const field = document.getElementById('field');
+  const picker = document.getElementById('picker');
+  const shield = document.getElementById('shield');
+  const hint = document.getElementById('hint');
+  const editCard = document.getElementById('editCard');
+  const editStatus = document.getElementById('editStatus');
+  const afterTurn = document.getElementById('afterTurn');
+
+  let buffer = '';
+  function setField(s){ field.textContent = s; }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      picker.style.display = 'none';
+      shield.classList.remove('open');
+      hint.style.display = 'none';
+      return;
+    }
+    if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
+      shield.classList.toggle('open');
+      e.preventDefault();
+      return;
+    }
+    if (e.key === '?') {
+      hint.style.display = hint.style.display === 'block' ? 'none' : 'block';
+      e.preventDefault();
+      return;
+    }
+    if (e.key === '/') {
+      picker.style.display = 'block';
+      buffer = '/';
+      setField(buffer);
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'a' && editCard && !editCard.classList.contains('approved')) {
+      editCard.classList.add('approved');
+      editStatus.textContent = '· approved · file written · re-indexed';
+      afterTurn.style.display = 'block';
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'r' && editCard && !editCard.classList.contains('approved')) {
+      editCard.style.opacity = '0.5';
+      editStatus.textContent = '· rejected — model will be told why';
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Backspace') {
+      buffer = buffer.slice(0,-1);
+      setField(buffer);
+      if (!buffer.startsWith('/')) picker.style.display = 'none';
+      return;
+    }
+    if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      buffer += e.key;
+      setField(buffer);
+    }
+  });
+
+  document.getElementById('shieldBtn').addEventListener('click', () => {
+    shield.classList.toggle('open');
+  });
+</script>
+</body>
+</html>

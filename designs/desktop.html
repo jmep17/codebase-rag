@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codebase-rag · Desktop redesign (terminal-native, retro)</title>
+<style>
+  /*
+   * Desktop redesign — Tauri-style native window wrapping the browser UI,
+   * plus what only the desktop can do: global hotkey overlay, menu-bar peek,
+   * native confirm sheet, tabbed sessions, system tray.
+   * Same phosphor-green tokens as cli.html / browser.html, AA-verified.
+   */
+  :root{
+    --bg-0:#050807; --bg-1:#0c1110; --bg-2:#142019; --bg-3:#1c2a23;
+    --border:#1f3b2e; --border-soft:#16261f; --border-hot:#2f7d4e;
+    --fg-0:#d6f5e3; --fg-1:#98c9af; --fg-2:#5b8b73; --fg-dim:#3d5e4d;
+    --accent:#4ade80; --accent-soft:#14361e;
+    --ok:#4ade80; --warn:#fbbf24; --danger:#f87171; --info:#22d3ee; --purple:#c084fc;
+    --mono:"JetBrains Mono","Berkeley Mono",ui-monospace,SF Mono,Consolas,monospace;
+    --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--fg-0);font-family:var(--sans);font-size:14px;line-height:1.55}
+  body{padding:24px;display:flex;flex-direction:column;align-items:center;gap:18px;min-height:100vh;
+    /* desktop background — simulated wallpaper */
+    background:
+      radial-gradient(circle at 25% 20%, rgba(74,222,128,.04), transparent 60%),
+      radial-gradient(circle at 80% 80%, rgba(34,211,238,.03), transparent 55%),
+      linear-gradient(rgba(74,222,128,.012) 50%, transparent 50%) 0 0/100% 3px,
+      #03100a}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  a:focus-visible,button:focus-visible,input:focus-visible,[role="switch"]:focus-visible{
+    outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+  kbd{font-family:var(--mono);font-size:11px;color:var(--fg-1);background:var(--bg-3);
+    border:1px solid var(--border);border-radius:3px;padding:1px 5px}
+
+  .pageHead{width:min(1280px,100%);display:flex;align-items:baseline;justify-content:space-between;gap:24px}
+  .pageHead h1{margin:0;font-size:15px;font-weight:600;color:var(--fg-0);letter-spacing:.02em;font-family:var(--mono)}
+  .pageHead .sub{color:var(--fg-2);font-size:12px;font-family:var(--mono)}
+  .pageHead .legend{margin-left:auto;color:var(--fg-2);font-size:12px;display:flex;gap:14px;font-family:var(--mono)}
+  .pageHead .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+  .sceneBar{width:min(1280px,100%);display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-family:var(--mono)}
+  .sceneBar .grp{display:inline-flex;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:3px;gap:2px}
+  .sceneBar button{appearance:none;background:transparent;border:0;color:var(--fg-1);font:inherit;font-size:12px;
+    padding:8px 14px;border-radius:4px;cursor:pointer;min-height:36px}
+  .sceneBar button[aria-pressed="true"]{background:var(--accent-soft);color:var(--fg-0);box-shadow:inset 0 0 0 1px var(--border-hot)}
+  .sceneBar button:hover:not([aria-pressed="true"]){background:var(--bg-2)}
+  .sceneBar .hint{color:var(--fg-2);font-size:12px;margin-left:auto}
+
+  /* macOS menu bar (system level) */
+  .menubar{width:min(1280px,100%);background:rgba(8,12,10,.85);backdrop-filter:blur(8px);
+    border:1px solid var(--border-soft);border-radius:6px;display:flex;align-items:center;gap:18px;padding:4px 14px;
+    font-family:var(--sans);font-size:12px;color:var(--fg-1)}
+  .menubar .apple{color:var(--accent);font-size:14px}
+  .menubar .app{color:var(--fg-0);font-weight:600}
+  .menubar .item{color:var(--fg-1);padding:2px 6px;border-radius:3px;cursor:pointer}
+  .menubar .item:hover{background:var(--bg-2)}
+  .menubar .right{margin-left:auto;display:flex;gap:14px;align-items:center}
+  .menubar .tray{color:var(--accent);font-family:var(--mono);font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 8px;border-radius:4px;border:1px solid var(--border-soft);background:var(--bg-1)}
+  .menubar .tray:hover{border-color:var(--border-hot)}
+  .menubar .tray .pillDot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 6px var(--ok)}
+  .menubar .tray .badge{background:var(--warn);color:#1a1500;border-radius:9px;padding:0 6px;font-weight:600;font-size:10px;margin-left:4px}
+  .menubar .clock{color:var(--fg-1);font-variant-numeric:tabular-nums}
+
+  /* native window frame */
+  .win{width:min(1280px,100%);background:var(--bg-0);border:1px solid var(--border);border-radius:10px;overflow:hidden;
+    box-shadow:0 0 0 1px #000, 0 28px 64px rgba(0,0,0,.7);position:relative}
+  .titleBar{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#080d0b;border-bottom:1px solid var(--border-soft);
+    -webkit-user-select:none}
+  .lights{display:flex;gap:7px}
+  .lights span{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.4)}
+  .lights .r{background:#ff5f57}.lights .y{background:#febc2e}.lights .g{background:#28c840}
+  .titleBar .title{color:var(--fg-1);font-size:13px;font-family:var(--mono);margin-left:8px}
+  .titleBar .title b{color:var(--fg-0);font-weight:500}
+  .titleBar .right{margin-left:auto;display:flex;gap:10px;align-items:center;color:var(--fg-2);font-size:12px;font-family:var(--mono)}
+
+  /* tab strip — multi-session */
+  .tabs{display:flex;background:#070b09;border-bottom:1px solid var(--border-soft);padding:0 6px;gap:0;overflow-x:auto}
+  .tab{display:flex;align-items:center;gap:8px;padding:8px 14px;color:var(--fg-1);font-family:var(--mono);font-size:12px;
+    border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;cursor:pointer;min-height:36px;
+    margin:4px 1px -1px;background:transparent}
+  .tab:hover{background:var(--bg-1);color:var(--fg-0)}
+  .tab.on{background:var(--bg-1);color:var(--fg-0);border-color:var(--border-soft);border-bottom-color:var(--bg-1)}
+  .tab .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 5px var(--ok)}
+  .tab .dot.warn{background:var(--warn);box-shadow:0 0 5px var(--warn)}
+  .tab .dot.busy{background:var(--info);box-shadow:0 0 5px var(--info);animation:pulse 1.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+  .tab .x{color:var(--fg-dim);font-size:14px;padding:0 2px;border-radius:3px;cursor:pointer}
+  .tab .x:hover{background:var(--bg-3);color:var(--fg-0)}
+  .tab.new{color:var(--fg-2);padding:8px 12px}
+
+  /* command bar / top app bar */
+  .topbar{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--bg-1);
+    border-bottom:1px solid var(--border-soft);font-family:var(--mono);font-size:12px;color:var(--fg-1)}
+  .pill{display:inline-flex;align-items:center;gap:6px;cursor:pointer;padding:5px 10px;border-radius:6px;
+    background:transparent;border:1px solid transparent;color:var(--fg-1);font-family:var(--mono);font-size:12px;min-height:32px}
+  .pill:hover{background:var(--bg-2);border-color:var(--border-soft)}
+  .pillDot{width:8px;height:8px;border-radius:50%;box-shadow:0 0 6px currentColor}
+  .pillDot.ok{background:var(--ok);color:var(--ok)}
+  .pillDot.warn{background:var(--warn);color:var(--warn)}
+  .pillDot.danger{background:var(--danger);color:var(--danger)}
+  .pill b{color:var(--fg-0);font-weight:600}
+  .topbar .sep{color:var(--fg-dim)}
+  .gate{display:inline-flex;align-items:center;gap:8px;padding:5px 10px;border-radius:6px;background:var(--bg-2);
+    border:1px solid var(--border-soft);min-height:32px;cursor:pointer}
+  .gate:hover{border-color:var(--border-hot)}
+  .gate b{color:var(--fg-0);font-weight:500;font-family:var(--mono);font-size:11px}
+  .switch{position:relative;width:28px;height:16px;border-radius:8px;background:var(--bg-3);border:1px solid var(--border);transition:.15s}
+  .switch::after{content:"";position:absolute;top:1px;left:1px;width:12px;height:12px;border-radius:50%;background:var(--fg-dim);transition:.15s}
+  .gate[aria-checked="true"] .switch{background:rgba(74,222,128,.22);border-color:var(--border-hot)}
+  .gate[aria-checked="true"] .switch::after{left:13px;background:var(--accent);box-shadow:0 0 6px var(--accent)}
+  .gate.warn[aria-checked="true"] .switch{background:rgba(251,191,36,.18);border-color:rgba(251,191,36,.5)}
+  .gate.warn[aria-checked="true"] .switch::after{background:var(--warn);box-shadow:0 0 6px var(--warn)}
+  .gate.danger[aria-checked="true"] .switch{background:rgba(248,113,113,.16);border-color:rgba(248,113,113,.5)}
+  .gate.danger[aria-checked="true"] .switch::after{background:var(--danger);box-shadow:0 0 6px var(--danger)}
+  .topbar .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+  /* main grid */
+  .grid{display:grid;grid-template-columns:260px minmax(0,1fr) 300px;height:660px;min-height:0}
+  .col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border-soft);background:var(--bg-0)}
+  .col:last-child{border-right:none}
+  .col.nav{background:var(--bg-1)}
+  .colHead{padding:10px 14px;color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+    border-bottom:1px solid var(--border-soft);background:var(--bg-1);font-family:var(--mono);display:flex;justify-content:space-between;align-items:center}
+  .colBody{overflow:auto;padding:10px 10px;flex:1}
+
+  .navItem{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;color:var(--fg-1);
+    font-family:var(--mono);font-size:13px;min-height:36px}
+  .navItem:hover{background:var(--bg-2);color:var(--fg-0)}
+  .navItem.on{background:var(--accent-soft);color:var(--fg-0);border:1px solid var(--border-hot)}
+  .navItem .ic{color:var(--fg-2);width:14px;text-align:center}
+  .navItem.on .ic{color:var(--accent)}
+  .navItem .k{margin-left:auto;color:var(--fg-dim);font-size:10px;font-family:var(--mono)}
+  .secH{color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.12em;margin:18px 6px 8px;font-family:var(--mono)}
+
+  .proj{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:3px;font-family:var(--mono);font-size:12px;border:1px solid transparent}
+  .proj.on{background:var(--bg-2);border-color:var(--border-hot);color:var(--fg-0)}
+  .proj .name{color:var(--fg-0);font-weight:500;display:flex;justify-content:space-between;align-items:center}
+  .proj .name .ind{color:var(--accent);font-size:11px}
+  .proj .meta{color:var(--fg-2);font-size:11px;margin-top:2px}
+
+  /* center: conversation (compact for desktop's taller chrome) */
+  .convo{display:flex;flex-direction:column;background:var(--bg-0)}
+  .chat{padding:20px 26px;overflow-y:auto;flex:1;font-family:var(--mono);font-size:13px}
+  .turn{margin-bottom:22px}
+  .user{display:flex;gap:10px;color:var(--fg-0)}
+  .user .ava{width:24px;height:24px;border-radius:4px;background:var(--bg-2);border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:13px;flex-shrink:0}
+  .user .body{flex:1;padding-top:2px;white-space:pre-wrap}
+  .meta{color:var(--fg-2);font-size:11px;margin:8px 0 8px 34px;display:flex;gap:14px;flex-wrap:wrap}
+  .meta b{color:var(--fg-1);font-weight:500}
+
+  .card{margin:10px 0 10px 34px;border-radius:6px;background:var(--bg-1);border:1px solid var(--border-soft);
+    border-left:3px solid var(--info);overflow:hidden}
+  .card.tool{border-left-color:var(--purple)}
+  .card.edit{border-left-color:var(--warn);background:rgba(251,191,36,.05)}
+  .card.shell{border-left-color:var(--info)}
+  .cardHead{display:flex;align-items:center;gap:10px;padding:10px 14px;color:var(--fg-1);font-size:12px;border-bottom:1px solid var(--border-soft)}
+  .cardHead .icon{font-weight:700;color:var(--info)}
+  .card.tool .cardHead .icon{color:var(--purple)}
+  .card.edit .cardHead .icon{color:var(--warn)}
+  .cardHead .t{color:var(--fg-0);font-weight:500}
+  .cardHead .right{margin-left:auto;color:var(--fg-2);font-size:11px}
+  .cardBody{padding:10px 14px;font-size:12px}
+  .pillRow{display:flex;flex-wrap:wrap;gap:6px}
+  .chunkPill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:var(--bg-2);
+    border:1px solid var(--border-soft);color:var(--info);font-family:var(--mono);font-size:11px;cursor:pointer;min-height:28px}
+  .chunkPill .s{color:var(--fg-2);font-variant-numeric:tabular-nums}
+  .answer{color:var(--fg-0);padding:8px 0 0;line-height:1.7}
+  .answer code{color:var(--accent);background:var(--bg-2);padding:1px 5px;border-radius:3px;border:1px solid var(--border-soft);font-family:var(--mono);font-size:12px}
+  .stream::after{content:"▎";color:var(--accent);animation:blink 1s steps(2,end) infinite;margin-left:2px}
+  @keyframes blink{50%{opacity:0}}
+  @media (prefers-reduced-motion: reduce){
+    .stream::after,.tab .dot.busy{animation:none}
+  }
+
+  /* composer */
+  .composer{padding:12px 18px;background:var(--bg-1);border-top:1px solid var(--border)}
+  .composer .row{display:flex;align-items:flex-start;gap:12px}
+  .composer textarea{flex:1;background:var(--bg-0);border:1px solid var(--border);border-radius:6px;color:var(--fg-0);
+    padding:10px 12px;min-height:54px;font-family:var(--mono);font-size:14px;resize:vertical;line-height:1.5}
+  .composer textarea:focus{border-color:var(--border-hot);outline:0;box-shadow:0 0 0 2px rgba(74,222,128,.25)}
+  .send{background:var(--accent-soft);border:1px solid var(--border-hot);color:var(--accent);
+    padding:0 18px;height:36px;border-radius:6px;font-family:var(--mono);font-size:12px;cursor:pointer;min-width:90px}
+  .send:hover{background:rgba(74,222,128,.2)}
+
+  /* right rail */
+  .right .colBody{padding:12px}
+  .rcard{margin-bottom:14px;background:var(--bg-1);border:1px solid var(--border-soft);border-radius:6px;overflow:hidden}
+  .rcard .h{padding:8px 12px;border-bottom:1px solid var(--border-soft);color:var(--fg-2);text-transform:uppercase;
+    letter-spacing:.1em;font-size:10px;font-family:var(--mono);display:flex;justify-content:space-between}
+  .rcard .h b{color:var(--fg-1);font-weight:500}
+  .rcard .b{padding:8px 12px;font-size:12px}
+  .pin{display:flex;justify-content:space-between;padding:5px 7px;border-radius:4px;color:var(--fg-1);font-family:var(--mono);font-size:12px;cursor:pointer}
+  .pin:hover{background:var(--bg-2);color:var(--fg-0)}
+  .pin .size{color:var(--fg-dim);font-size:11px}
+
+  /* status bar — bottom (desktop-only affordance) */
+  .statusBar{display:flex;align-items:center;gap:18px;padding:6px 14px;background:#070b09;border-top:1px solid var(--border-soft);
+    font-family:var(--mono);font-size:11px;color:var(--fg-1)}
+  .statusBar .pillDot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:6px;box-shadow:0 0 5px currentColor}
+  .statusBar .pillDot.ok{background:var(--ok);color:var(--ok)}
+  .statusBar .pillDot.warn{background:var(--warn);color:var(--warn)}
+  .statusBar .right{margin-left:auto;display:flex;gap:14px;color:var(--fg-2)}
+  .statusBar b{color:var(--fg-0);font-weight:500}
+  .statusBar .reindex{color:var(--info)}
+
+  /* GLOBAL HOTKEY OVERLAY (Alfred-style) */
+  .hotkeyOverlay{position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(2px);
+    display:flex;align-items:flex-start;justify-content:center;padding-top:140px;z-index:50}
+  .hotkey{width:min(640px,92%);background:var(--bg-1);border:1px solid var(--border-hot);border-radius:10px;
+    box-shadow:0 0 0 1px #000, 0 24px 64px rgba(0,0,0,.7), 0 0 60px rgba(74,222,128,.12);overflow:hidden}
+  .hotkey .h{padding:14px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border-soft);background:var(--bg-2)}
+  .hotkey .h .ic{color:var(--accent);font-size:18px}
+  .hotkey .h input{flex:1;background:transparent;border:0;color:var(--fg-0);font-family:var(--mono);font-size:17px;outline:0}
+  .hotkey .h .ctx{color:var(--fg-2);font-family:var(--mono);font-size:11px;background:var(--bg-3);border:1px solid var(--border);border-radius:4px;padding:4px 8px}
+  .hotkey .l{max-height:340px;overflow:auto}
+  .hotkey .it{display:flex;gap:14px;padding:10px 18px;color:var(--fg-1);font-family:var(--mono);font-size:12px;cursor:pointer;border-left:2px solid transparent;align-items:center}
+  .hotkey .it.sel,.hotkey .it:hover{background:var(--bg-2);color:var(--fg-0);border-left-color:var(--accent)}
+  .hotkey .it .ic{color:var(--fg-2);width:18px;text-align:center}
+  .hotkey .it.sel .ic{color:var(--accent)}
+  .hotkey .it .n{font-weight:500;color:var(--fg-0)}
+  .hotkey .it .d{color:var(--fg-2);flex:1}
+  .hotkey .it .k{color:var(--fg-dim);font-size:11px}
+  .hotkey .f{padding:8px 18px;background:var(--bg-0);border-top:1px solid var(--border-soft);color:var(--fg-2);font-family:var(--mono);font-size:11px;display:flex;gap:14px}
+
+  /* native confirm sheet (macOS sheet style) */
+  .sheetOverlay{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding-top:130px;z-index:30}
+  .sheet{width:min(560px,92%);background:linear-gradient(180deg,#101713,#0a1310);border:1px solid var(--warn);
+    border-radius:10px;overflow:hidden;box-shadow:0 0 0 1px #000, 0 24px 48px rgba(0,0,0,.7), 0 0 40px rgba(251,191,36,.12)}
+  .sheet .h{display:flex;gap:14px;padding:18px 22px;border-bottom:1px solid var(--border-soft);align-items:flex-start}
+  .sheet .h .iw{width:42px;height:42px;border-radius:50%;background:rgba(251,191,36,.12);display:flex;align-items:center;justify-content:center;color:var(--warn);font-size:20px;flex-shrink:0}
+  .sheet .h .t{font-family:var(--sans);font-size:15px;color:var(--fg-0);font-weight:600;margin-bottom:4px}
+  .sheet .h .s{font-family:var(--sans);font-size:13px;color:var(--fg-1)}
+  .sheet .b{padding:16px 22px;font-family:var(--mono);font-size:12px}
+  .sheet .diff{background:var(--bg-2);border:1px solid var(--border-soft);border-radius:4px;padding:10px 12px;font-family:var(--mono);font-size:12px;line-height:1.65}
+  .sheet .diff div{white-space:pre}
+  .sheet .diff .minus{color:var(--danger)}
+  .sheet .diff .plus{color:var(--ok)}
+  .sheet .diff .ctx{color:var(--fg-2)}
+  .sheet .actions{padding:12px 22px;background:rgba(0,0,0,.25);border-top:1px solid var(--border-soft);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .sheet .actions .trust{margin-right:auto;color:var(--fg-2);font-family:var(--sans);font-size:12px;display:inline-flex;align-items:center;gap:6px}
+  .btn{font-family:var(--sans);font:inherit;font-size:13px;padding:8px 16px;border-radius:6px;cursor:pointer;min-height:36px;
+    background:var(--bg-2);color:var(--fg-0);border:1px solid var(--border)}
+  .btn:hover{background:var(--bg-3);border-color:var(--border-hot)}
+  .btn.primary{background:var(--accent-soft);border-color:var(--border-hot);color:var(--accent)}
+  .btn.primary:hover{background:rgba(74,222,128,.18)}
+  .btn.danger{color:var(--danger);border-color:rgba(248,113,113,.35)}
+  .btn.danger:hover{background:rgba(248,113,113,.08)}
+
+  /* TRAY PEEK */
+  .tray{position:absolute;top:54px;right:200px;width:300px;background:rgba(8,12,10,.96);backdrop-filter:blur(10px);
+    border:1px solid var(--border-hot);border-radius:10px;padding:14px;font-family:var(--mono);font-size:12px;color:var(--fg-1);
+    box-shadow:0 16px 48px rgba(0,0,0,.6), 0 0 32px rgba(74,222,128,.1);z-index:40}
+  .tray h3{margin:0 0 8px;font-family:var(--sans);font-size:13px;color:var(--fg-0);display:flex;justify-content:space-between}
+  .tray h3 span{color:var(--accent);font-family:var(--mono);font-size:11px}
+  .tray .row{display:flex;justify-content:space-between;padding:6px 8px;border-radius:4px}
+  .tray .row:hover{background:var(--bg-2)}
+  .tray .row b{color:var(--fg-0)}
+  .tray .row .ago{color:var(--fg-dim)}
+  .tray hr{border:0;border-top:1px solid var(--border-soft);margin:8px 0}
+  .tray .act{display:flex;justify-content:space-between;color:var(--fg-1);padding:5px 8px;border-radius:4px;cursor:pointer}
+  .tray .act:hover{background:var(--bg-2);color:var(--fg-0)}
+
+  .legendRow{width:min(1280px,100%);font-family:var(--mono);font-size:12px;color:var(--fg-2);display:flex;gap:18px;flex-wrap:wrap;margin-top:-4px}
+  .legendRow b{color:var(--fg-1);font-weight:500}
+
+  @media (max-width:1100px){
+    body{padding:14px}
+    .grid{grid-template-columns:200px minmax(0,1fr) 240px}
+  }
+</style>
+</head>
+<body>
+
+<div class="pageHead">
+  <div>
+    <h1>codebase-rag · Desktop redesign <span style="color:var(--accent)">v2</span></h1>
+    <div class="sub">Tauri-style native window · tabbed sessions · menu-bar tray · global hotkey · WCAG 2.1 AA</div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--ok)"></span><b>local</b></span>
+    <span><span class="dot" style="background:var(--warn)"></span><b>+ web</b></span>
+    <span><span class="dot" style="background:var(--danger)"></span><b>+ cloud</b></span>
+  </div>
+</div>
+
+<div class="legendRow">
+  Desktop is the browser UI wrapped in Tauri, plus the deltas only a native shell can do:
+  <b>global hotkey</b> · <b>menu-bar tray</b> · <b>multi-tab sessions</b> · <b>system notifications</b> · <b>native confirm sheets</b>.
+</div>
+
+<div class="sceneBar" role="tablist" aria-label="Design scenes">
+  <div class="grp" role="group">
+    <button role="tab" aria-pressed="true"  data-scene="chat">tabbed chat</button>
+    <button role="tab" aria-pressed="false" data-scene="hotkey">global hotkey (⌥⇧Space)</button>
+    <button role="tab" aria-pressed="false" data-scene="confirm">native confirm sheet</button>
+    <button role="tab" aria-pressed="false" data-scene="tray">menu-bar tray peek</button>
+  </div>
+  <span class="hint">All scenes share one window · macOS-style chrome</span>
+</div>
+
+<!-- system menu bar (above the window — represents the OS, not the app) -->
+<div class="menubar" aria-label="System menu bar">
+  <span class="apple">⌘</span>
+  <span class="app">codebase-rag</span>
+  <span class="item">File</span>
+  <span class="item">Edit</span>
+  <span class="item">View</span>
+  <span class="item">Session</span>
+  <span class="item">Index</span>
+  <span class="item">Window</span>
+  <span class="item">Help</span>
+  <span class="right">
+    <span class="tray" id="trayBtn" aria-haspopup="true" aria-expanded="false">
+      <span class="pillDot"></span> codebase-rag <b style="color:var(--fg-0);margin-left:4px">2 pending</b><span class="badge">2</span>
+    </span>
+    <span class="clock">17:42</span>
+  </span>
+</div>
+
+<div class="win" id="win">
+
+  <!-- title bar (the app window itself) -->
+  <div class="titleBar">
+    <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="title"><b>codebase-rag</b> — ~/code/codebase-rag · auth middleware</div>
+    <div class="right">
+      <span>local</span><span style="color:var(--fg-dim)">·</span>
+      <span>qwen2.5-coder:7b</span>
+    </div>
+  </div>
+
+  <!-- multi-tab session strip (desktop-only) -->
+  <div class="tabs" role="tablist" aria-label="Open sessions">
+    <div class="tab on" role="tab" aria-selected="true">
+      <span class="dot warn"></span> codebase-rag · auth middleware
+      <span class="x" aria-label="close tab">×</span>
+    </div>
+    <div class="tab" role="tab">
+      <span class="dot busy"></span> codebase-rag · retrieval tuning
+      <span class="x" aria-label="close tab">×</span>
+    </div>
+    <div class="tab" role="tab">
+      <span class="dot"></span> infra/terraform · vpc audit
+      <span class="x" aria-label="close tab">×</span>
+    </div>
+    <div class="tab" role="tab">
+      <span class="dot"></span> marketing-site · hero copy
+      <span class="x" aria-label="close tab">×</span>
+    </div>
+    <div class="tab new" role="tab">+ new chat <kbd>⌘T</kbd></div>
+  </div>
+
+  <!-- top app bar -->
+  <div class="topbar">
+    <span class="pill"><span class="pillDot ok"></span><b>local</b></span>
+    <span class="sep">│</span>
+    <span class="gate" role="switch" tabindex="0" aria-checked="true"><b>read</b><span class="switch"></span></span>
+    <span class="gate warn" role="switch" tabindex="0" aria-checked="true"><b>write</b><span class="switch"></span></span>
+    <span class="gate warn" role="switch" tabindex="0" aria-checked="false"><b>shell</b><span class="switch"></span></span>
+    <span class="gate danger" role="switch" tabindex="0" aria-checked="false"><b>web</b><span class="switch"></span></span>
+    <span class="right">
+      <span class="pill"><kbd>⌘K</kbd> command palette</span>
+      <span class="pill"><kbd>⌥⇧Space</kbd> ask anywhere</span>
+    </span>
+  </div>
+
+  <!-- SCENE: TABBED CHAT -->
+  <div class="scene" data-scene="chat">
+    <div class="grid">
+      <aside class="col nav" aria-label="Navigation">
+        <div class="colHead">Navigation</div>
+        <div class="colBody">
+          <div class="navItem on"><span class="ic">▤</span> Chat <span class="k">⌘1</span></div>
+          <div class="navItem"><span class="ic">⌕</span> Search <span class="k">⌘2</span></div>
+          <div class="navItem"><span class="ic">⚙</span> Index <span class="k">⌘3</span></div>
+          <div class="navItem"><span class="ic">📜</span> Audit <span class="k">⌘4</span></div>
+          <div class="navItem"><span class="ic">⚒</span> Settings <span class="k">⌘,</span></div>
+
+          <div class="secH">Projects</div>
+          <div class="proj on">
+            <div class="name">codebase-rag <span class="ind">●</span></div>
+            <div class="meta">4.2k ch · main · 2 dirty</div>
+          </div>
+          <div class="proj">
+            <div class="name">infra/terraform</div>
+            <div class="meta">1.1k ch · main</div>
+          </div>
+          <div class="proj">
+            <div class="name">marketing-site</div>
+            <div class="meta">312 ch · main</div>
+          </div>
+          <div class="proj" style="border-style:dashed;color:var(--fg-2);text-align:center;cursor:pointer">+ index a directory</div>
+        </div>
+      </aside>
+
+      <main class="col convo" aria-label="Conversation">
+        <div class="chat">
+
+          <div class="turn">
+            <div class="user">
+              <div class="ava">&gt;</div>
+              <div class="body">how does the prompt-injection guard for retrieved chunks work?</div>
+            </div>
+            <div class="meta"><span>retrieve: <b>5 chunks + 2 pinned</b></span><span>·</span><span><b>1.2s</b></span></div>
+
+            <div class="card">
+              <div class="cardHead">
+                <span class="icon">⟢</span><span class="t">retrieved</span>
+                <span style="color:var(--fg-2)">·  5 chunks · 124ms</span>
+                <span class="right">⌘R inspect</span>
+              </div>
+              <div class="cardBody">
+                <div class="pillRow">
+                  <span class="chunkPill">codebase_rag/chat.py:248-286 <span class="s">0.84</span></span>
+                  <span class="chunkPill">codebase_rag/tools.py:1-44 <span class="s">0.79</span></span>
+                  <span class="chunkPill">codebase_rag/chat.py:189-225 <span class="s">0.71</span></span>
+                  <span class="chunkPill" style="color:var(--purple)">refs/anthropic-docs · prompt-injection.md <span class="s">0.59</span></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="answer">
+              <p>Every external string that re-enters the model — retrieved chunks, <code>read_file</code> results, <code>grep</code> matches,
+              web fetches, shell stdout — is wrapped in <code>&lt;&lt;&lt;UNTRUSTED-BEGIN&gt;&gt;&gt; … &lt;&lt;&lt;UNTRUSTED-END&gt;&gt;&gt;</code> markers
+              before being concatenated into the prompt. The system prompt teaches the model to treat anything inside those markers as data, not instructions.</p>
+            </div>
+
+            <div class="card tool">
+              <div class="cardHead">
+                <span class="icon">⛁</span><span class="t">read_file</span>
+                <span style="color:var(--fg-2)">·  codebase_rag/chat.py</span>
+                <span class="right"><span style="color:var(--ok)">ok</span> · 1018 lines · 38ms</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="user">
+              <div class="ava">&gt;</div>
+              <div class="body">add a one-line docstring to <code style="color:var(--accent);font-family:var(--mono)">format_context</code> explaining the markers</div>
+            </div>
+            <div class="answer stream" style="margin-left:34px">I&#39;ll add a docstring clarifying the UNTRUSTED-wrapping contract</div>
+          </div>
+
+        </div>
+
+        <div class="composer">
+          <div class="row">
+            <textarea aria-label="message input" placeholder="ask anything — type / for slash commands · ⌘↵ to send"></textarea>
+            <button class="send">send ⌘↵</button>
+          </div>
+        </div>
+      </main>
+
+      <aside class="col right" aria-label="Context">
+        <div class="colHead"><span>Context</span><a href="#" style="text-transform:none;letter-spacing:0;color:var(--fg-2);font-family:var(--mono);font-size:11px">⌘\</a></div>
+        <div class="colBody">
+          <div class="rcard">
+            <div class="h"><span>Pinned</span><b>2 files</b></div>
+            <div class="b">
+              <div class="pin"><span>codebase_rag/chat.py</span><span class="size">35 KB</span></div>
+              <div class="pin"><span>codebase_rag/tools.py</span><span class="size">22 KB</span></div>
+            </div>
+          </div>
+          <div class="rcard">
+            <div class="h"><span>References</span><b>2</b></div>
+            <div class="b" style="font-family:var(--mono);font-size:12px;color:var(--purple)">
+              › anthropic-docs (1.4k)<br/>› chromadb-readme (0.3k)
+            </div>
+          </div>
+          <div class="rcard">
+            <div class="h"><span>Git</span><b>main</b></div>
+            <div class="b" style="font-family:var(--mono);font-size:12px;color:var(--fg-1)">
+              <span style="color:var(--accent)">●</span> main · <span style="color:var(--warn)">2 dirty</span>
+              <div style="color:var(--fg-2);font-size:11px;margin-top:4px">↳ codebase_rag/chat.py<br/>↳ codebase_rag/tools.py</div>
+              <div style="margin-top:8px"><a href="#">:diff</a> · <a href="#">:commit</a> · <a href="#">:undo</a></div>
+            </div>
+          </div>
+          <div class="rcard">
+            <div class="h"><span>Permissions</span><b style="color:var(--ok)">disk + notifications</b></div>
+            <div class="b" style="font-family:var(--mono);font-size:11px;color:var(--fg-2)">
+              Granted at first run · <a href="#">re-prompt</a>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- SCENE: HOTKEY -->
+  <div class="scene" data-scene="hotkey" hidden style="position:relative">
+    <div class="grid">
+      <aside class="col nav" aria-hidden="true"><div class="colBody" style="opacity:.35"></div></aside>
+      <main class="col convo" aria-hidden="true"><div class="chat" style="opacity:.35"></div></main>
+      <aside class="col right" aria-hidden="true"><div class="colBody" style="opacity:.35"></div></aside>
+    </div>
+    <div class="hotkeyOverlay" role="dialog" aria-label="Ask codebase-rag from anywhere">
+      <div class="hotkey">
+        <div class="h">
+          <span class="ic">⌘</span>
+          <input aria-label="ask" value="where do we wrap retrieved chunks in UNTRUSTED markers?" />
+          <span class="ctx">project: <b style="color:var(--fg-0);font-family:var(--mono)">codebase-rag</b> (frontmost folder)</span>
+        </div>
+        <div class="l" role="listbox">
+          <div class="it sel">
+            <span class="ic">▸</span>
+            <span class="n">ask in this project</span>
+            <span class="d">opens a new chat tab and answers with retrieval</span>
+            <span class="k">↵</span>
+          </div>
+          <div class="it">
+            <span class="ic">⌕</span>
+            <span class="n">search</span>
+            <span class="d">semantic search over codebase-rag · jump to file</span>
+            <span class="k">⇧↵</span>
+          </div>
+          <div class="it">
+            <span class="ic">⤓</span>
+            <span class="n">switch project</span>
+            <span class="d">infra/terraform · marketing-site · …</span>
+            <span class="k">⌘P</span>
+          </div>
+          <div class="it">
+            <span class="ic">📜</span>
+            <span class="n">open audit log for this session</span>
+            <span class="d">last 5 events · jump straight to context</span>
+            <span class="k">⌘L</span>
+          </div>
+          <div class="it">
+            <span class="ic">⊘</span>
+            <span class="n">dismiss</span>
+            <span class="d">close without doing anything</span>
+            <span class="k">esc</span>
+          </div>
+        </div>
+        <div class="f">
+          <span>project auto-detected from frontmost editor window</span>
+          <span style="margin-left:auto">global hotkey: <kbd>⌥⇧Space</kbd></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: NATIVE CONFIRM SHEET -->
+  <div class="scene" data-scene="confirm" hidden style="position:relative">
+    <div class="grid">
+      <aside class="col nav" aria-hidden="true"><div class="colBody" style="opacity:.4"></div></aside>
+      <main class="col convo" aria-hidden="true"><div class="chat" style="opacity:.4"></div></main>
+      <aside class="col right" aria-hidden="true"><div class="colBody" style="opacity:.4"></div></aside>
+    </div>
+    <div class="sheetOverlay" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="sheet">
+        <div class="h">
+          <div class="iw">✎</div>
+          <div>
+            <div class="t" id="sheet-title">codebase-rag wants to edit a file</div>
+            <div class="s"><code style="font-family:var(--mono);color:var(--fg-0)">codebase_rag/chat.py</code> · 3 lines added · 0 removed · 1 hunk</div>
+          </div>
+        </div>
+        <div class="b">
+          <div class="diff" aria-label="proposed diff">
+            <div class="ctx">@@ format_context @@</div>
+            <div class="ctx"> def format_context(chunks: list[dict], pinned: list[dict] | None = None) -&gt; str:</div>
+            <div class="minus">-    """Render context for a user turn.</div>
+            <div class="plus">+    """Render context for a user turn. Wraps the whole block in UNTRUSTED markers so the</div>
+            <div class="plus">+    model treats retrieved code as data, not instructions.</div>
+            <div class="ctx">     Order: pinned files (full content), project chunks (retrieved), reference chunks.</div>
+            <div class="ctx">     """</div>
+          </div>
+        </div>
+        <div class="actions">
+          <label class="trust"><input type="checkbox" /> trust <code style="font-family:var(--mono);color:var(--fg-0)">edit_file</code> in this project for 1h</label>
+          <button class="btn danger">Reject</button>
+          <button class="btn">Show full diff</button>
+          <button class="btn primary">Approve</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: TRAY PEEK -->
+  <div class="scene" data-scene="tray" hidden style="position:relative">
+    <div class="grid">
+      <aside class="col nav" aria-hidden="true"><div class="colBody" style="opacity:.5"></div></aside>
+      <main class="col convo" aria-hidden="true"><div class="chat" style="opacity:.5"></div></main>
+      <aside class="col right" aria-hidden="true"><div class="colBody" style="opacity:.5"></div></aside>
+    </div>
+    <div class="tray" role="dialog" aria-label="Menu-bar peek">
+      <h3>codebase-rag <span>● local</span></h3>
+      <div style="color:var(--fg-2);font-size:11px;margin-bottom:8px">qwen2.5-coder:7b · ollama · 4,231 chunks indexed</div>
+
+      <div style="color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin:6px 0">Pending approvals (2)</div>
+      <div class="row">
+        <span><b>edit_file</b> codebase_rag/chat.py</span><span class="ago">now</span>
+      </div>
+      <div class="row">
+        <span><b>run_shell</b> pytest -k test_retrieve</span><span class="ago">12s</span>
+      </div>
+
+      <hr/>
+      <div style="color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.1em;margin:6px 0">Last events</div>
+      <div class="row"><span><span style="color:var(--purple)">tool_call</span> read_file</span><span class="ago">41s</span></div>
+      <div class="row"><span><span style="color:var(--accent)">slash</span> :add chat.py</span><span class="ago">44s</span></div>
+      <div class="row"><span><span style="color:var(--danger)">declined</span> rm -rf node_modules</span><span class="ago">47s</span></div>
+
+      <hr/>
+      <div class="act"><span>Open chat</span><span class="ago"><kbd>⌥⇧C</kbd></span></div>
+      <div class="act"><span>Audit log</span><span class="ago"><kbd>⌥⇧L</kbd></span></div>
+      <div class="act"><span>Ask anywhere</span><span class="ago"><kbd>⌥⇧Space</kbd></span></div>
+      <div class="act"><span>Indexing status</span><span class="ago" style="color:var(--info)">re-indexing src/auth.ts…</span></div>
+      <hr/>
+      <div class="act" style="color:var(--fg-2)"><span>Quit codebase-rag</span><span class="ago"><kbd>⌘Q</kbd></span></div>
+    </div>
+  </div>
+
+  <!-- desktop-only status bar (bottom of window) -->
+  <div class="statusBar" role="status">
+    <span><span class="pillDot ok"></span><b>local</b></span>
+    <span style="color:var(--fg-dim)">·</span>
+    <span><b>qwen2.5-coder:7b</b> · ollama</span>
+    <span style="color:var(--fg-dim)">·</span>
+    <span><b>4,231</b> chunks</span>
+    <span style="color:var(--fg-dim)">·</span>
+    <span class="reindex">↻ re-indexing src/auth.ts (file changed)</span>
+    <span class="right">
+      <span>session a8c41f6e</span>
+      <span>turn: <b>1.2s</b> · 8,412 in → 612 out · 78 tok/s</span>
+      <span><kbd>?</kbd> shortcuts</span>
+    </span>
+  </div>
+</div>
+
+<script>
+  const buttons = document.querySelectorAll('.sceneBar button[data-scene]');
+  const scenes  = document.querySelectorAll('.scene[data-scene]');
+  function show(name){
+    buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
+    scenes.forEach(s => s.hidden = (s.dataset.scene !== name));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => show(b.dataset.scene)));
+  document.querySelectorAll('[role="switch"]').forEach(sw => {
+    sw.addEventListener('click', () => {
+      const v = sw.getAttribute('aria-checked') === 'true';
+      sw.setAttribute('aria-checked', String(!v));
+    });
+    sw.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); sw.click(); }
+    });
+  });
+  document.querySelector('.sceneBar').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const list = [...buttons];
+    const cur = list.findIndex(b => b.getAttribute('aria-pressed') === 'true');
+    const next = e.key === 'ArrowRight' ? (cur+1)%list.length : (cur-1+list.length)%list.length;
+    list[next].focus(); show(list[next].dataset.scene);
+  });
+  // Clicking the tray pill in the menu bar jumps to the tray scene
+  document.getElementById('trayBtn').addEventListener('click', () => show('tray'));
+</script>
+
+</body>
+</html>

@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 80" role="img" aria-label="codebase-rag">
+  <title>codebase-rag</title>
+  <!-- Mark, scaled and translated -->
+  <g transform="translate(8 8)">
+    <g fill="#a7b0bf">
+      <rect x="8"  y="18" width="20" height="4" rx="1.5"/>
+      <rect x="8"  y="30" width="14" height="4" rx="1.5"/>
+      <rect x="8"  y="42" width="18" height="4" rx="1.5"/>
+    </g>
+    <path d="M34 16 L52 32 L34 48"
+          fill="none" stroke="#7aa2f7" stroke-width="5"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="88" y="52"
+        font-family="JetBrains Mono, ui-monospace, SF Mono, Menlo, Consolas, monospace"
+        font-size="32" font-weight="600" fill="#e6e9ef"
+        letter-spacing="-0.5">codebase<tspan fill="#6b7484">-</tspan><tspan fill="#7aa2f7">rag</tspan></text>
+</svg>

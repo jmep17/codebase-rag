@@ -1,0 +1,855 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codebase-rag · CLI redesign (terminal-native, retro)</title>
+<style>
+  /*
+   * Design tokens — terminal-native retro
+   * Phosphor-green-on-black, audited for WCAG 2.1 AA on the default bg #050807.
+   * Body text (fg-0)        :  16.5 : 1   ✓ AAA
+   * Secondary (fg-1)        :   8.1 : 1   ✓ AAA
+   * Tertiary (fg-2)         :   4.7 : 1   ✓ AA (large + UI only)
+   * Accent green (#4ade80)  :  12.0 : 1   ✓ AAA
+   * Warn amber (#fbbf24)    :  11.0 : 1   ✓ AAA
+   * Danger red (#f87171)    :   6.4 : 1   ✓ AA
+   * Info cyan (#22d3ee)     :   9.7 : 1   ✓ AAA
+   */
+  :root{
+    --bg-0:#050807; --bg-1:#0c1110; --bg-2:#142019; --bg-3:#1c2a23;
+    --border:#1f3b2e; --border-soft:#16261f; --border-hot:#2f7d4e;
+    --fg-0:#d6f5e3; --fg-1:#98c9af; --fg-2:#5b8b73; --fg-dim:#3d5e4d;
+    --accent:#4ade80; --accent-soft:#14361e;
+    --ok:#4ade80; --warn:#fbbf24; --danger:#f87171; --info:#22d3ee; --purple:#c084fc;
+    --mono:"JetBrains Mono","Berkeley Mono",ui-monospace,SF Mono,Consolas,monospace;
+    --grid:#0f1a14;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--fg-0);font-family:var(--mono);font-size:13px;line-height:1.55;
+    /* faint CRT-style scanline */
+    background-image:linear-gradient(rgba(74,222,128,.025) 50%, transparent 50%);
+    background-size:100% 3px;
+  }
+  body{padding:24px;display:flex;flex-direction:column;align-items:center;gap:20px;min-height:100vh}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:2px}
+
+  .pageHead{width:min(1180px,100%);display:flex;align-items:baseline;justify-content:space-between;gap:24px}
+  .pageHead h1{margin:0;font-size:15px;font-weight:600;color:var(--fg-0);letter-spacing:.02em}
+  .pageHead .sub{color:var(--fg-2);font-size:12px}
+  .pageHead .legend{margin-left:auto;color:var(--fg-2);font-size:12px;display:flex;gap:14px}
+  .pageHead .legend b{color:var(--fg-1);font-weight:500}
+
+  .sceneBar{width:min(1180px,100%);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .sceneBar .grp{display:inline-flex;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:3px;gap:2px}
+  .sceneBar button{appearance:none;background:transparent;border:0;color:var(--fg-1);
+    font-family:var(--mono);font-size:12px;padding:8px 14px;border-radius:4px;cursor:pointer;min-height:36px}
+  .sceneBar button[aria-pressed="true"]{background:var(--accent-soft);color:var(--fg-0);box-shadow:inset 0 0 0 1px var(--border-hot)}
+  .sceneBar button:hover:not([aria-pressed="true"]){background:var(--bg-2)}
+  .sceneBar .hint{color:var(--fg-2);font-size:12px;margin-left:auto}
+
+  /* terminal frame */
+  .term{width:min(1180px,100%);background:var(--bg-0);border:1px solid var(--border);border-radius:10px;
+    box-shadow:0 0 0 1px #000, 0 24px 48px rgba(0,0,0,.6), 0 0 60px rgba(74,222,128,.04);
+    overflow:hidden;position:relative}
+  .term::after{
+    /* very faint vignette to feel CRT-ish */
+    content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,.35) 100%);
+  }
+  .termChrome{display:flex;align-items:center;gap:10px;padding:10px 14px;background:#080d0b;border-bottom:1px solid var(--border)}
+  .lights{display:flex;gap:7px}
+  .lights span{width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.4)}
+  .lights .r{background:#ff5f57}.lights .y{background:#febc2e}.lights .g{background:#28c840}
+  .termTitle{color:var(--fg-2);font-size:12px;margin-left:8px}
+  .termTitle b{color:var(--fg-1);font-weight:500}
+
+  /* status / shield bar — like tmux */
+  .shield{display:flex;align-items:center;gap:14px;padding:8px 14px;background:var(--bg-1);
+    border-bottom:1px solid var(--border-soft);font-size:12px;color:var(--fg-1);flex-wrap:wrap}
+  .shield .pill{display:inline-flex;align-items:center;gap:6px}
+  .shieldDot{width:8px;height:8px;border-radius:50%;display:inline-block;box-shadow:0 0 6px currentColor}
+  .shieldDot.ok{background:var(--ok);color:var(--ok)}
+  .shieldDot.warn{background:var(--warn);color:var(--warn)}
+  .shieldDot.danger{background:var(--danger);color:var(--danger)}
+  .shield .sep{color:var(--fg-dim)}
+  .shield .right{margin-left:auto;color:var(--fg-2);display:flex;gap:14px}
+  .shield kbd{font-family:var(--mono);font-size:11px;color:var(--fg-1);background:var(--bg-3);border:1px solid var(--border);
+    border-radius:3px;padding:1px 5px}
+
+  /* main grid */
+  .grid{display:grid;grid-template-columns:220px minmax(0,1fr) 260px;height:720px;min-height:0}
+  .col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border-soft);background:var(--bg-0)}
+  .col:last-child{border-right:none}
+  .colHead{padding:8px 12px;color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.12em;
+    border-bottom:1px solid var(--border-soft);background:var(--bg-1)}
+  .colBody{overflow:auto;padding:10px 12px;flex:1}
+
+  /* left: sessions/projects */
+  .proj{padding:7px 9px;border-radius:4px;margin-bottom:3px;cursor:pointer;border:1px solid transparent}
+  .proj:hover{background:var(--bg-2)}
+  .proj.active{background:var(--accent-soft);border-color:var(--border-hot);color:var(--fg-0)}
+  .proj .name{color:var(--fg-0);font-weight:500}
+  .proj .meta{color:var(--fg-2);font-size:11px;margin-top:2px}
+  .proj .sessions{margin-top:6px;padding-left:10px;border-left:1px dashed var(--border-soft);font-size:11px}
+  .proj .sessions div{color:var(--fg-1);padding:3px 0;cursor:pointer}
+  .proj .sessions div.cur{color:var(--accent)}
+  .proj .sessions div:hover{color:var(--fg-0)}
+  .newBtn{margin-top:10px;width:100%;background:transparent;color:var(--accent);
+    border:1px dashed var(--border);border-radius:4px;padding:8px;cursor:pointer;font:inherit;font-size:12px;min-height:36px}
+  .newBtn:hover{background:var(--bg-2);border-style:solid;border-color:var(--border-hot)}
+
+  /* center: transcript */
+  .chat{padding:18px 22px;overflow-y:auto;flex:1}
+  .turn{margin-bottom:22px}
+  .user{color:var(--fg-0);white-space:pre-wrap;word-wrap:break-word}
+  .user::before{content:"> ";color:var(--accent);font-weight:600}
+  .meta{color:var(--fg-2);font-size:11px;margin:6px 0 8px;display:flex;gap:14px}
+  .meta b{color:var(--fg-1);font-weight:500}
+
+  .card{margin:8px 0;border-radius:4px;background:var(--bg-1);position:relative;
+    border:1px solid var(--border-soft);border-left:2px solid var(--info)}
+  .card.tool{border-left-color:var(--purple)}
+  .card.edit{border-left-color:var(--warn);background:rgba(251,191,36,.05)}
+  .card.shell{border-left-color:var(--info)}
+  .card.web{border-left-color:var(--info)}
+  .card.declined{border-left-color:var(--danger);background:rgba(248,113,113,.04)}
+  .cardHead{display:flex;align-items:center;gap:10px;padding:8px 12px;color:var(--fg-1);font-size:12px;
+    border-bottom:1px solid var(--border-soft)}
+  .cardHead .icon{color:var(--info);font-weight:700}
+  .card.tool .cardHead .icon{color:var(--purple)}
+  .card.edit .cardHead .icon{color:var(--warn)}
+  .card.declined .cardHead .icon{color:var(--danger)}
+  .cardHead .t{color:var(--fg-0);font-weight:500}
+  .cardHead .right{margin-left:auto;color:var(--fg-2);font-size:11px}
+  .cardBody{padding:8px 12px;font-size:12px}
+
+  .chunk{display:flex;gap:12px;padding:3px 0;color:var(--fg-1)}
+  .chunk .path{color:var(--info);min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chunk .score{color:var(--fg-2);font-variant-numeric:tabular-nums}
+  .chunk .ref{color:var(--purple)}
+
+  .answer{color:var(--fg-0);padding:6px 0 0}
+  .answer p{margin:0 0 8px}
+  .answer code{color:var(--accent);background:var(--bg-2);padding:1px 4px;border-radius:2px;border:1px solid var(--border-soft)}
+  .stream::after{content:"▎";color:var(--accent);animation:blink 1s steps(2,end) infinite;margin-left:1px}
+  @keyframes blink{50%{opacity:0}}
+  @media (prefers-reduced-motion: reduce){
+    .stream::after{animation:none}
+  }
+
+  .diff{font-size:12px;line-height:1.6;background:var(--bg-2);border-radius:3px;padding:8px 10px;border:1px solid var(--border-soft);margin-top:6px;overflow-x:auto}
+  .diff div{white-space:pre}
+  .diff .minus{color:var(--danger)}
+  .diff .plus{color:var(--ok)}
+  .diff .ctx{color:var(--fg-2)}
+
+  .keybar{margin-top:10px;padding-top:8px;border-top:1px dashed var(--border-soft);display:flex;flex-wrap:wrap;gap:12px;
+    color:var(--fg-2);font-size:11px}
+  .keybar kbd{font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-0);
+    border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:6px;min-width:18px;display:inline-block;text-align:center}
+  .keybar kbd.ok{color:var(--ok);border-color:rgba(74,222,128,.35)}
+  .keybar kbd.no{color:var(--danger);border-color:rgba(248,113,113,.35)}
+
+  /* right rail: retrieval + context */
+  .secH{color:var(--fg-2);font-size:10px;text-transform:uppercase;letter-spacing:.12em;margin:10px 2px 6px}
+  .secH:first-child{margin-top:0}
+  .pin{padding:5px 7px;border-radius:3px;color:var(--fg-1);display:flex;justify-content:space-between;gap:8px;font-size:12px}
+  .pin:hover{background:var(--bg-2);color:var(--fg-0)}
+  .pin .size{color:var(--fg-dim);font-size:11px;font-variant-numeric:tabular-nums}
+  .ref{padding:4px 7px;color:var(--info);font-size:12px}
+  .gitline{display:flex;gap:8px;color:var(--fg-1);font-size:12px;padding:3px 7px}
+  .gitline .dirty{color:var(--warn)}
+
+  /* composer */
+  .composer{padding:10px 14px;background:var(--bg-1);border-top:1px solid var(--border)}
+  .composer .row{display:flex;align-items:flex-start;gap:10px}
+  .composer .gt{color:var(--accent);font-weight:700;padding-top:6px}
+  .composer .ta{flex:1;background:var(--bg-0);border:1px solid var(--border);border-radius:4px;color:var(--fg-0);
+    padding:6px 8px;min-height:34px;font:inherit}
+  .composer .pinned{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+  .composer .chip{display:inline-flex;align-items:center;gap:4px;background:var(--bg-2);border:1px solid var(--border-soft);
+    border-radius:12px;padding:2px 8px;font-size:11px;color:var(--fg-1)}
+  .composer .chip .x{color:var(--fg-2);cursor:pointer}
+
+  .hintbar{padding:6px 14px;background:var(--bg-1);border-top:1px solid var(--border-soft);
+    color:var(--fg-2);font-size:11px;display:flex;gap:14px;flex-wrap:wrap}
+  .hintbar kbd{font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);
+    border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:4px}
+
+  /* slash-command palette overlay */
+  .overlay{position:absolute;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:flex-start;justify-content:center;padding-top:80px;z-index:5}
+  .palette{width:min(560px,92%);background:var(--bg-1);border:1px solid var(--border-hot);border-radius:6px;
+    box-shadow:0 0 0 1px #000, 0 16px 48px rgba(0,0,0,.6), 0 0 40px rgba(74,222,128,.12);overflow:hidden}
+  .palette .pHead{padding:10px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border-soft);background:var(--bg-2)}
+  .palette .pHead .gt{color:var(--accent)}
+  .palette .pHead input{flex:1;background:transparent;border:0;color:var(--fg-0);font:inherit;outline:0;font-size:14px}
+  .palette .pHead .esc{color:var(--fg-2);font-size:11px}
+  .palette .pList{max-height:340px;overflow:auto}
+  .palette .pItem{display:flex;justify-content:space-between;gap:14px;padding:8px 14px;color:var(--fg-1);cursor:pointer;font-size:12px;border-left:2px solid transparent}
+  .palette .pItem:hover,.palette .pItem.sel{background:var(--bg-2);color:var(--fg-0);border-left-color:var(--accent)}
+  .palette .pItem .name{color:var(--fg-0);font-weight:500;min-width:90px}
+  .palette .pItem .desc{color:var(--fg-2);flex:1}
+  .palette .pItem .req{color:var(--warn);font-size:11px}
+  .palette .pFoot{padding:8px 14px;border-top:1px solid var(--border-soft);color:var(--fg-2);font-size:11px;display:flex;gap:14px;background:var(--bg-1)}
+  .palette .pFoot kbd{font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);
+    border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-right:4px}
+
+  /* confirm modal */
+  .modal{position:absolute;inset:0;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:5;padding:24px}
+  .confirm{width:min(680px,100%);background:var(--bg-1);border:1px solid var(--warn);border-radius:6px;overflow:hidden;
+    box-shadow:0 0 0 1px #000, 0 16px 48px rgba(0,0,0,.6), 0 0 40px rgba(251,191,36,.12)}
+  .confirm .ch{padding:10px 16px;background:rgba(251,191,36,.08);border-bottom:1px solid var(--border-soft);
+    color:var(--warn);font-weight:600;font-size:13px;display:flex;align-items:center;gap:8px}
+  .confirm .ch .icon{font-size:14px}
+  .confirm .cb{padding:14px 16px;font-size:12px;color:var(--fg-1)}
+  .confirm .cb .target{color:var(--fg-0)}
+  .confirm .ca{padding:10px 16px;border-top:1px solid var(--border-soft);background:var(--bg-0);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .confirm .ca .prompt{color:var(--fg-2);font-size:12px;margin-right:auto}
+  .btn{font:inherit;font-size:12px;padding:8px 14px;border-radius:4px;cursor:pointer;min-height:36px;
+    background:var(--bg-2);color:var(--fg-0);border:1px solid var(--border)}
+  .btn:hover{background:var(--bg-3);border-color:var(--border-hot)}
+  .btn.primary{background:var(--accent-soft);border-color:var(--border-hot);color:var(--accent)}
+  .btn.primary:hover{background:rgba(74,222,128,.18)}
+  .btn.danger{color:var(--danger);border-color:rgba(248,113,113,.35)}
+
+  /* INDEX SCENE */
+  .indexScene{padding:24px 28px;height:720px;overflow:auto}
+  .indexScene h2{font-size:14px;margin:0 0 4px;color:var(--fg-0);font-weight:600}
+  .indexScene .desc{color:var(--fg-2);font-size:12px;margin-bottom:18px}
+  .progress{background:var(--bg-1);border:1px solid var(--border);border-radius:4px;padding:14px 16px;margin-bottom:14px}
+  .progress .pl{display:flex;justify-content:space-between;color:var(--fg-1);font-size:12px;margin-bottom:8px}
+  .progress .pl b{color:var(--fg-0)}
+  .bar{height:8px;background:var(--bg-3);border-radius:3px;overflow:hidden;border:1px solid var(--border-soft)}
+  .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--info));box-shadow:0 0 12px var(--accent)}
+  .log{background:var(--bg-1);border:1px solid var(--border);border-radius:4px;padding:14px 16px;font-size:12px}
+  .log .ln{display:flex;gap:12px;padding:2px 0;color:var(--fg-1)}
+  .log .ln .ts{color:var(--fg-dim);font-variant-numeric:tabular-nums;min-width:80px}
+  .log .ln.ok::before{content:"✓";color:var(--ok);min-width:14px}
+  .log .ln.warn::before{content:"!";color:var(--warn);min-width:14px}
+  .log .ln.info::before{content:"·";color:var(--info);min-width:14px}
+  .log .ln.skip::before{content:"↷";color:var(--fg-dim);min-width:14px}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .stat{background:var(--bg-1);border:1px solid var(--border);border-radius:4px;padding:12px 14px}
+  .stat .lbl{color:var(--fg-2);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+  .stat .val{color:var(--fg-0);font-size:22px;font-variant-numeric:tabular-nums;margin-top:4px}
+  .stat .sub{color:var(--fg-1);font-size:11px;margin-top:6px}
+
+  /* SEARCH SCENE */
+  .searchScene{height:720px;display:grid;grid-template-rows:auto 1fr}
+  .searchBar{padding:14px 18px;border-bottom:1px solid var(--border-soft);background:var(--bg-1);display:flex;align-items:center;gap:10px}
+  .searchBar .gt{color:var(--accent);font-weight:700}
+  .searchBar input{flex:1;background:var(--bg-0);border:1px solid var(--border);border-radius:4px;
+    color:var(--fg-0);padding:8px 12px;font:inherit;font-size:14px}
+  .searchBar .k{color:var(--fg-2);font-size:11px}
+  .searchBar .k kbd{font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);
+    border:1px solid var(--border);border-radius:3px;padding:1px 5px}
+  .searchBody{display:grid;grid-template-columns:380px 1fr;min-height:0}
+  .results{overflow:auto;border-right:1px solid var(--border-soft);padding:8px 0}
+  .resItem{padding:8px 14px;cursor:pointer;border-left:2px solid transparent;display:grid;grid-template-columns:1fr auto;gap:8px}
+  .resItem:hover{background:var(--bg-1)}
+  .resItem.sel{background:var(--bg-2);border-left-color:var(--accent)}
+  .resItem .p{color:var(--info);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .resItem .s{color:var(--fg-2);font-variant-numeric:tabular-nums;font-size:11px}
+  .resItem .snip{grid-column:1 / -1;color:var(--fg-1);font-size:11px;margin-top:2px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.8}
+  .resItem .kind{font-size:10px;color:var(--purple);text-transform:uppercase;letter-spacing:.1em}
+  .resItem .kind.proj{color:var(--accent)}
+  .preview{overflow:auto;background:var(--bg-0)}
+  .preview .ph{padding:10px 16px;border-bottom:1px solid var(--border-soft);color:var(--info);font-size:12px}
+  .preview .ph .range{color:var(--fg-2);margin-left:8px}
+  .preview pre{margin:0;padding:14px 18px;color:var(--fg-0);font-size:12px;line-height:1.6}
+  .preview pre .ln{color:var(--fg-dim);user-select:none;margin-right:14px;display:inline-block;width:32px;text-align:right;font-variant-numeric:tabular-nums}
+  .preview pre .hl{background:rgba(74,222,128,.12);display:block;border-left:2px solid var(--accent);padding-left:4px;margin-left:-6px}
+
+  /* AUDIT SCENE */
+  .auditScene{height:720px;display:grid;grid-template-rows:auto 1fr}
+  .auditBar{padding:10px 16px;border-bottom:1px solid var(--border-soft);background:var(--bg-1);
+    display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--fg-1)}
+  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg-2);border:1px solid var(--border);
+    border-radius:14px;padding:4px 10px;color:var(--fg-1);font-size:11px;cursor:pointer;min-height:28px}
+  .chip:hover{border-color:var(--border-hot);color:var(--fg-0)}
+  .chip.on{background:var(--accent-soft);border-color:var(--border-hot);color:var(--accent)}
+  .auditList{overflow:auto}
+  .ev{display:grid;grid-template-columns:120px 110px 1fr;gap:14px;padding:8px 16px;border-bottom:1px solid var(--border-soft);
+    font-size:12px;align-items:start}
+  .ev .ts{color:var(--fg-2);font-variant-numeric:tabular-nums}
+  .ev .kind{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--fg-2)}
+  .ev .kind.toolcall{color:var(--purple)}
+  .ev .kind.toolresult{color:var(--info)}
+  .ev .kind.slash{color:var(--accent)}
+  .ev .kind.session{color:var(--fg-1)}
+  .ev .kind.declined{color:var(--danger)}
+  .ev .body{color:var(--fg-1);white-space:pre-wrap;word-break:break-word}
+  .ev .body b{color:var(--fg-0);font-weight:500}
+  .ev .body .arg{color:var(--info)}
+  .ev .body .ok{color:var(--ok)}
+  .ev .body .err{color:var(--danger)}
+
+  .legendRow{width:min(1180px,100%);font-size:12px;color:var(--fg-2);display:flex;gap:18px;flex-wrap:wrap;margin-top:-4px}
+  .legendRow b{color:var(--fg-1);font-weight:500}
+  .legendRow .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+  /* responsive: don't bother below ~900, just allow horizontal scroll on the frame */
+  @media (max-width:980px){
+    body{padding:14px}
+    .grid{grid-template-columns:160px minmax(0,1fr) 200px}
+  }
+</style>
+</head>
+<body>
+
+<div class="pageHead">
+  <div>
+    <h1>codebase-rag · CLI redesign <span style="color:var(--accent)">v2</span></h1>
+    <div class="sub">Terminal-native retro · phosphor-green palette · WCAG 2.1 AA verified</div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--ok)"></span><b>local</b></span>
+    <span><span class="dot" style="background:var(--warn)"></span><b>+ web</b></span>
+    <span><span class="dot" style="background:var(--danger)"></span><b>+ cloud</b></span>
+  </div>
+</div>
+
+<div class="legendRow">
+  Use the scene buttons below to flip between the four feature areas the redesign covers:
+  <b>chat</b> · <b>indexing</b> · <b>search</b> · <b>tool-gating & confirmations</b> · <b>sessions</b> · <b>audit</b>.
+</div>
+
+<div class="sceneBar" role="tablist" aria-label="Design scenes">
+  <div class="grp" role="group">
+    <button role="tab" aria-pressed="true"  data-scene="chat">chat</button>
+    <button role="tab" aria-pressed="false" data-scene="palette">slash palette</button>
+    <button role="tab" aria-pressed="false" data-scene="confirm-write">confirm write</button>
+    <button role="tab" aria-pressed="false" data-scene="confirm-shell">confirm shell</button>
+    <button role="tab" aria-pressed="false" data-scene="index">indexing</button>
+    <button role="tab" aria-pressed="false" data-scene="search">search</button>
+    <button role="tab" aria-pressed="false" data-scene="audit">audit log</button>
+  </div>
+  <span class="hint">All scenes share one terminal frame · keyboard nav supported</span>
+</div>
+
+<div class="term" id="term">
+  <div class="termChrome">
+    <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="termTitle"><b>codebase-rag</b> chat — ~/code/codebase-rag — qwen2.5-coder:7b</div>
+  </div>
+
+  <!-- Shield / status bar -->
+  <div class="shield" role="status" aria-label="Session status">
+    <span class="pill"><span class="shieldDot ok"></span>local</span>
+    <span class="sep">│</span>
+    <span class="pill"><b>qwen2.5-coder:7b</b> <span class="sep">·</span> ollama</span>
+    <span class="sep">│</span>
+    <span class="pill">read+write</span>
+    <span class="sep">·</span>
+    <span class="pill" style="color:var(--fg-2)">shell:off</span>
+    <span class="sep">·</span>
+    <span class="pill" style="color:var(--fg-2)">web:off</span>
+    <span class="sep">│</span>
+    <span class="pill">4,231 chunks</span>
+    <span class="sep">│</span>
+    <span class="pill" style="color:var(--warn)">2 pending</span>
+    <span class="right">
+      <span><kbd>^K</kbd> command</span>
+      <span><kbd>^P</kbd> projects</span>
+      <span><kbd>?</kbd> help</span>
+    </span>
+  </div>
+
+  <!-- SCENE: CHAT -->
+  <div class="scene" data-scene="chat">
+    <div class="grid">
+      <!-- left rail: projects + sessions -->
+      <aside class="col" aria-label="Projects and sessions">
+        <div class="colHead">Projects · Sessions</div>
+        <div class="colBody">
+          <div class="proj active">
+            <div class="name">codebase-rag</div>
+            <div class="meta">4.2k ch · refs: 2 · main●</div>
+            <div class="sessions" role="list">
+              <div class="cur" aria-current="true">▸ now · auth middleware</div>
+              <div>2h ago · retrieval tuning</div>
+              <div>yesterday · refactor providers</div>
+              <div style="color:var(--fg-2)">3 older …</div>
+            </div>
+          </div>
+          <div class="proj">
+            <div class="name">marketing-site</div>
+            <div class="meta">312 ch · refs: 0</div>
+          </div>
+          <div class="proj">
+            <div class="name">infra/terraform</div>
+            <div class="meta">1.1k ch · refs: 1</div>
+          </div>
+          <button class="newBtn" type="button">+ index a directory</button>
+        </div>
+      </aside>
+
+      <!-- center: transcript -->
+      <main class="col" aria-label="Conversation">
+        <div class="chat">
+          <div class="turn">
+            <div class="user">how does the prompt-injection guard for retrieved chunks work?</div>
+            <div class="meta">
+              <span>retrieve: <b>5 chunks + 2 pinned</b></span>
+              <span>·</span><span><b>1.2s</b></span>
+              <span>·</span><span>qwen2.5-coder:7b</span>
+            </div>
+
+            <div class="card retrieval">
+              <div class="cardHead">
+                <span class="icon">⟢</span><span class="t">retrieved · 5 chunks · 124ms</span>
+                <span class="right">expand <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);border:1px solid var(--border);border-radius:3px;padding:1px 4px;color:var(--fg-1)">^R</kbd></span>
+              </div>
+              <div class="cardBody">
+                <div class="chunk"><span class="path">codebase_rag/chat.py:248-286</span><span class="score">0.84</span></div>
+                <div class="chunk"><span class="path">codebase_rag/tools.py:1-44</span><span class="score">0.79</span></div>
+                <div class="chunk"><span class="path">codebase_rag/chat.py:189-225</span><span class="score">0.71</span></div>
+                <div class="chunk"><span class="path">codebase_rag/tools.py:512-538</span><span class="score">0.66</span></div>
+                <div class="chunk ref"><span class="path">[refs/anthropic-docs] prompt-injection.md:1-22</span><span class="score">0.59</span></div>
+              </div>
+            </div>
+
+            <div class="answer">
+              <p>Every external string that re-enters the model — retrieved chunks, <code>read_file</code> results,
+              <code>grep</code> matches, web fetches, shell stdout — is wrapped in
+              <code>&lt;&lt;&lt;UNTRUSTED-BEGIN&gt;&gt;&gt; … &lt;&lt;&lt;UNTRUSTED-END&gt;&gt;&gt;</code> markers
+              before being concatenated into the prompt.</p>
+              <p>The system prompt teaches the model to treat anything between those markers as <i>data</i>, not instructions.
+              The wrapping happens in <code>format_context()</code> at <code>codebase_rag/chat.py:286</code>, and tool results
+              add the markers in <code>tools.py</code>.</p>
+            </div>
+
+            <div class="card tool">
+              <div class="cardHead">
+                <span class="icon">⛁</span><span class="t">read_file</span>
+                <span style="color:var(--fg-2)">·  codebase_rag/chat.py</span>
+                <span class="right"><span style="color:var(--ok)">ok</span> · 1018 lines · 38ms</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="turn">
+            <div class="user">add a one-line docstring to <code>format_context</code> explaining the markers</div>
+            <div class="meta">
+              <span>retrieve: <b>3 chunks</b></span><span>·</span><span><b>0.9s</b></span>
+            </div>
+            <div class="card edit">
+              <div class="cardHead">
+                <span class="icon">✎</span><span class="t">edit_file</span>
+                <span style="color:var(--fg-2)">·  codebase_rag/chat.py</span>
+                <span class="right" style="color:var(--warn)">pending approval</span>
+              </div>
+              <div class="cardBody">
+                <div class="diff" aria-label="proposed diff">
+                  <div class="ctx">@@ chat.py:248-251 @@</div>
+                  <div class="ctx">def format_context(chunks: list[dict], pinned: list[dict] | None = None) -&gt; str:</div>
+                  <div class="minus">-    """Render context for a user turn.</div>
+                  <div class="plus">+    """Render context for a user turn. Wraps everything in UNTRUSTED markers so</div>
+                  <div class="plus">+    the model treats retrieved code as data, not instructions.</div>
+                  <div class="ctx">    Order: pinned files (full content), project chunks (retrieved), reference chunks.</div>
+                </div>
+                <div class="keybar">
+                  <span><kbd class="ok">a</kbd>approve</span>
+                  <span><kbd class="no">r</kbd>reject</span>
+                  <span><kbd>e</kbd>edit</span>
+                  <span><kbd>d</kbd>full diff</span>
+                  <span><kbd>w</kbd>why? (show retrieval)</span>
+                </div>
+              </div>
+            </div>
+            <div class="answer stream">I&#39;ll add a docstring clarifying the UNTRUSTED-wrapping contract</div>
+          </div>
+        </div>
+
+        <!-- composer -->
+        <div class="composer" aria-label="Composer">
+          <div class="pinned">
+            <span class="chip">📎 codebase_rag/chat.py <span class="x" aria-label="unpin">×</span></span>
+            <span class="chip">📎 codebase_rag/tools.py <span class="x" aria-label="unpin">×</span></span>
+          </div>
+          <div class="row">
+            <span class="gt">&gt;</span>
+            <div class="ta" contenteditable="false" aria-label="message input">type a message — &quot;/&quot; for slash commands · <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">⌥ ↵</kbd> to send</div>
+          </div>
+        </div>
+        <div class="hintbar">
+          <span><kbd>^R</kbd> retrieval inspector</span>
+          <span><kbd>^L</kbd> audit overlay</span>
+          <span><kbd>^K</kbd> command palette</span>
+          <span><kbd>/</kbd> slash menu</span>
+          <span><kbd>j</kbd>/<kbd>k</kbd> walk turns</span>
+          <span><kbd>?</kbd> help</span>
+        </div>
+      </main>
+
+      <!-- right rail: retrieval + context -->
+      <aside class="col" aria-label="Context">
+        <div class="colHead">Context</div>
+        <div class="colBody">
+          <div class="secH">Pinned (2)</div>
+          <div class="pin"><span>codebase_rag/chat.py</span><span class="size">35 KB</span></div>
+          <div class="pin"><span>codebase_rag/tools.py</span><span class="size">22 KB</span></div>
+
+          <div class="secH">References (2)</div>
+          <div class="ref">› anthropic-docs (1.4k)</div>
+          <div class="ref">› chromadb-readme (0.3k)</div>
+
+          <div class="secH">Notes</div>
+          <div style="color:var(--fg-1);font-size:12px;padding:2px 7px">
+            Local-first. Anthropic is the only cloud provider. No <code>rich</code> dep without weighing.
+          </div>
+
+          <div class="secH">Git</div>
+          <div class="gitline"><span style="color:var(--accent)">●</span><span>main</span><span class="dirty">· 2 dirty</span></div>
+          <div class="gitline" style="color:var(--fg-2);font-size:11px;padding-top:0">
+            <span style="margin-left:14px">codebase_rag/chat.py</span>
+          </div>
+          <div class="gitline" style="color:var(--fg-2);font-size:11px;padding-top:0">
+            <span style="margin-left:14px">codebase_rag/tools.py</span>
+          </div>
+
+          <div class="secH">Retrieval (last turn)</div>
+          <div style="color:var(--fg-1);font-size:11px;padding:2px 7px">5 chunks · 124ms · top 0.84</div>
+          <div style="color:var(--fg-2);font-size:11px;padding:2px 7px"><kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">^R</kbd> to inspect</div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- SCENE: SLASH-COMMAND PALETTE -->
+  <div class="scene" data-scene="palette" hidden>
+    <div class="grid">
+      <aside class="col" aria-hidden="true"><div class="colHead">Projects · Sessions</div><div class="colBody" style="opacity:.5"></div></aside>
+      <main class="col" aria-label="Conversation"><div class="chat" style="opacity:.35"></div></main>
+      <aside class="col" aria-hidden="true"><div class="colHead">Context</div><div class="colBody" style="opacity:.5"></div></aside>
+    </div>
+    <div class="overlay" role="dialog" aria-label="Slash command picker">
+      <div class="palette">
+        <div class="pHead">
+          <span class="gt">/</span>
+          <input value="diff" aria-label="filter slash commands" />
+          <span class="esc">esc</span>
+        </div>
+        <div class="pList" role="listbox">
+          <div class="pItem sel" role="option" aria-selected="true">
+            <span class="name">:diff</span>
+            <span class="desc">show pending git diff (touched files only)</span>
+            <span class="req">git</span>
+          </div>
+          <div class="pItem" role="option">
+            <span class="name">:commit</span>
+            <span class="desc">commit model-touched files with <code style="color:var(--accent)">[codebase-rag]</code> tag</span>
+            <span class="req">git · confirm</span>
+          </div>
+          <div class="pItem" role="option">
+            <span class="name">:undo</span>
+            <span class="desc">revert the last [codebase-rag] commit</span>
+            <span class="req">git · confirm</span>
+          </div>
+          <div class="pItem" role="option">
+            <span class="name">:add</span>
+            <span class="desc">pin a file or glob to every turn — :add src/auth.py</span>
+            <span></span>
+          </div>
+          <div class="pItem" role="option">
+            <span class="name">:fetch</span>
+            <span class="desc">fetch a URL into context (cached locally)</span>
+            <span class="req">--allow-web</span>
+          </div>
+          <div class="pItem" role="option">
+            <span class="name">:run</span>
+            <span class="desc">run a shell command (asks before executing)</span>
+            <span class="req">--allow-shell · confirm</span>
+          </div>
+        </div>
+        <div class="pFoot">
+          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+          <span><kbd>↵</kbd> run</span>
+          <span><kbd>tab</kbd> complete</span>
+          <span style="margin-left:auto;color:var(--fg-dim)">flag-gated commands are marked in amber</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: CONFIRM WRITE -->
+  <div class="scene" data-scene="confirm-write" hidden>
+    <div class="grid">
+      <aside class="col" aria-hidden="true"><div class="colHead">Projects · Sessions</div><div class="colBody" style="opacity:.5"></div></aside>
+      <main class="col" aria-hidden="true"><div class="chat" style="opacity:.35"></div></main>
+      <aside class="col" aria-hidden="true"><div class="colHead">Context</div><div class="colBody" style="opacity:.5"></div></aside>
+    </div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cw-title">
+      <div class="confirm">
+        <div class="ch" id="cw-title"><span class="icon">✎</span> model wants to edit a file</div>
+        <div class="cb">
+          <div style="margin-bottom:8px">
+            <span class="target">codebase_rag/chat.py</span>
+            <span style="color:var(--fg-2)">·  3 lines added · 0 removed · 1 hunk</span>
+          </div>
+          <div class="diff" aria-label="proposed diff">
+            <div class="ctx">@@ chat.py:248-251 @@</div>
+            <div class="ctx"> def format_context(chunks: list[dict], pinned: list[dict] | None = None) -&gt; str:</div>
+            <div class="minus">-    """Render context for a user turn.</div>
+            <div class="plus">+    """Render context for a user turn. Wraps the whole block in UNTRUSTED markers so the</div>
+            <div class="plus">+    model treats retrieved code as data, not instructions.</div>
+            <div class="ctx">     Order: pinned files (full content), project chunks (retrieved), reference chunks.</div>
+            <div class="ctx">     """</div>
+          </div>
+        </div>
+        <div class="ca">
+          <span class="prompt">Apply edit? <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">y</kbd> / <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">N</kbd> / <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">d</kbd> diff · <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">t</kbd> trust this tool for session</span>
+          <button class="btn danger">reject (N)</button>
+          <button class="btn primary">apply (y)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: CONFIRM SHELL -->
+  <div class="scene" data-scene="confirm-shell" hidden>
+    <div class="grid">
+      <aside class="col" aria-hidden="true"><div class="colHead">Projects · Sessions</div><div class="colBody" style="opacity:.5"></div></aside>
+      <main class="col" aria-hidden="true"><div class="chat" style="opacity:.35"></div></main>
+      <aside class="col" aria-hidden="true"><div class="colHead">Context</div><div class="colBody" style="opacity:.5"></div></aside>
+    </div>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cs-title">
+      <div class="confirm" style="border-color:var(--info)">
+        <div class="ch" id="cs-title" style="background:rgba(34,211,238,.07);color:var(--info)">
+          <span class="icon">▶</span> model wants to run a shell command
+        </div>
+        <div class="cb">
+          <div style="color:var(--fg-2);margin-bottom:6px">runner: <span style="color:var(--fg-0)">host</span> · network: <span style="color:var(--fg-0)">none</span> · timeout: <span style="color:var(--fg-0)">30s</span></div>
+          <div class="diff" style="margin-top:4px">
+            <div style="color:var(--accent)">$ pytest -k test_retrieve -q</div>
+          </div>
+          <div style="color:var(--fg-2);font-size:11px;margin-top:8px">
+            This command will execute on your <b style="color:var(--fg-0)">host</b> machine with the same permissions as <code>codebase-rag</code>.
+            Network is disabled. Review carefully — declining returns an <code>ok:false</code> result to the model.
+          </div>
+        </div>
+        <div class="ca">
+          <span class="prompt">Run? <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">y</kbd> / <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">N</kbd> / <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">e</kbd> edit command</span>
+          <button class="btn danger">decline (N)</button>
+          <button class="btn">edit</button>
+          <button class="btn primary">run (y)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: INDEXING -->
+  <div class="scene" data-scene="index" hidden>
+    <div class="indexScene">
+      <h2>indexing — ~/code/codebase-rag</h2>
+      <div class="desc">
+        ChromaDB collection <code style="color:var(--accent)">cbr_codebase-rag_a8c41f</code> ·
+        <code>nomic-embed-text</code> · 768-dim · all-local
+      </div>
+
+      <div class="progress" role="progressbar" aria-valuenow="68" aria-valuemin="0" aria-valuemax="100" aria-label="indexing progress">
+        <div class="pl">
+          <span>chunking · <b>codebase_rag/chat.py</b></span>
+          <span><b>682</b> / 1004 files · <span style="color:var(--accent)">68%</span></span>
+        </div>
+        <div class="bar"><i style="width:68%"></i></div>
+        <div class="pl" style="margin-top:8px;color:var(--fg-2);font-size:11px">
+          <span>eta 14s · 286 chunks/s · embedding via ollama (nomic-embed-text)</span>
+          <span>press <kbd style="font-family:var(--mono);font-size:10px;background:var(--bg-3);color:var(--fg-1);border:1px solid var(--border);border-radius:3px;padding:1px 5px">^C</kbd> to cancel · partial results kept</span>
+        </div>
+      </div>
+
+      <div class="log" aria-label="indexing log">
+        <div class="ln ok"><span class="ts">17:42:03.121</span>indexed 12 files in <code>codebase_rag/</code> · 142 chunks</div>
+        <div class="ln info"><span class="ts">17:42:03.488</span>respected <code>.codebaseragignore</code>: skipped <code>.venv/</code>, <code>node_modules/</code>, <code>*.lock</code></div>
+        <div class="ln skip"><span class="ts">17:42:04.011</span>skipped <code>assets/screencast.gif</code> (binary)</div>
+        <div class="ln skip"><span class="ts">17:42:04.014</span>skipped <code>codebase_rag.egg-info/PKG-INFO</code> (in egg-info)</div>
+        <div class="ln warn"><span class="ts">17:42:04.207</span>large file <code>design/SPEC.md</code> (47 KB) — split into 18 chunks</div>
+        <div class="ln ok"><span class="ts">17:42:04.589</span>embedded batch 14/22 (32 chunks) · 318ms</div>
+        <div class="ln info"><span class="ts">17:42:04.901</span>upsert → <code>cbr_codebase-rag_a8c41f</code> · 4,189 total</div>
+      </div>
+
+      <div class="grid2">
+        <div class="stat">
+          <div class="lbl">collection</div>
+          <div class="val">4,231</div>
+          <div class="sub">chunks · 2.8M tokens indexed · 21 MB on disk</div>
+        </div>
+        <div class="stat">
+          <div class="lbl">references</div>
+          <div class="val">2</div>
+          <div class="sub">anthropic-docs (1.4k) · chromadb-readme (0.3k) — <a href="#">manage</a></div>
+        </div>
+        <div class="stat">
+          <div class="lbl">staleness</div>
+          <div class="val" style="color:var(--warn)">2</div>
+          <div class="sub">files changed since last index · <a href="#">reindex now</a></div>
+        </div>
+        <div class="stat">
+          <div class="lbl">storage</div>
+          <div class="val" style="font-size:13px;color:var(--fg-1)">~/.codebase-rag/meta/<wbr/>a8c41f6e4c92/</div>
+          <div class="sub">per-project · nothing in the repo · <a href="#">reveal</a></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: SEARCH -->
+  <div class="scene" data-scene="search" hidden>
+    <div class="searchScene">
+      <div class="searchBar">
+        <span class="gt">⌕</span>
+        <input value="how does the prompt-injection guard work" aria-label="semantic search" />
+        <span class="k">top-k <kbd>5</kbd> · scope <kbd>all</kbd> · <kbd>↵</kbd> search</span>
+      </div>
+      <div class="searchBody">
+        <div class="results">
+          <div class="resItem sel">
+            <span class="p">codebase_rag/chat.py:248-286</span>
+            <span class="s">0.84</span>
+            <span class="snip">format_context wraps retrieved chunks in UNTRUSTED-BEGIN / UNTRUSTED-END markers …</span>
+            <span class="kind proj">project</span>
+          </div>
+          <div class="resItem">
+            <span class="p">codebase_rag/tools.py:1-44</span>
+            <span class="s">0.79</span>
+            <span class="snip">UNTRUSTED_BEGIN and UNTRUSTED_END constants used by all tool result formatters …</span>
+            <span class="kind proj">project</span>
+          </div>
+          <div class="resItem">
+            <span class="p">codebase_rag/chat.py:189-225</span>
+            <span class="s">0.71</span>
+            <span class="snip">SYSTEM_PROMPT spells out the UNTRUSTED contract for the model …</span>
+            <span class="kind proj">project</span>
+          </div>
+          <div class="resItem">
+            <span class="p">codebase_rag/tools.py:512-538</span>
+            <span class="s">0.66</span>
+            <span class="snip">run_shell appends UNTRUSTED markers before returning stdout/stderr …</span>
+            <span class="kind proj">project</span>
+          </div>
+          <div class="resItem">
+            <span class="p">[anthropic-docs] prompt-injection.md:1-22</span>
+            <span class="s">0.59</span>
+            <span class="snip">Treat retrieved content as data, not instructions. Wrap external strings …</span>
+            <span class="kind">reference</span>
+          </div>
+        </div>
+        <div class="preview">
+          <div class="ph">codebase_rag/chat.py <span class="range">lines 248-286 · score 0.84</span></div>
+          <pre><span class="ln">248</span>def format_context(chunks: list[dict], pinned: list[dict] | None = None) -&gt; str:
+<span class="ln">249</span>    """Render context for a user turn.
+<span class="ln">250</span>
+<span class="ln">251</span>    Order: pinned files (full content), project chunks (retrieved), reference chunks.
+<span class="ln">252</span>    Wraps the whole block in &lt;&lt;&lt;UNTRUSTED-...&gt;&gt;&gt; markers (Feature 7a).
+<span class="ln">253</span>    """
+<span class="ln">254</span>    pinned = pinned or []
+<span class="ln">255</span>    project_chunks = []
+<span class="ln">256</span>    references: dict[str, list[dict]] = {}
+<span class="ln">257</span>    for c in chunks:
+<span class="ln">258</span>        kind = c.get("kind") or "project"
+<span class="ln">259</span>        if kind == "reference":
+<span class="ln">260</span>            references.setdefault(c.get("label") or "reference", []).append(c)
+<span class="ln">261</span>        else:
+<span class="ln">262</span>            project_chunks.append(c)
+<span class="hl"><span class="ln">263</span>
+<span class="ln">264</span>    sections: list[str] = []
+<span class="ln">265</span>    if pinned:
+<span class="ln">266</span>        body = "\n\n".join(
+<span class="ln">267</span>            f"### {p['path']} (pinned, full file, {p['size']} bytes)\n```\n{p['content']}\n```"
+<span class="ln">268</span>            for p in pinned
+<span class="ln">269</span>        )
+<span class="ln">270</span>        sections.append(f"## Pinned files (always shown)\n\n{body}")</span>
+<span class="ln">271</span>    if project_chunks:
+<span class="ln">272</span>        body = "\n\n".join(
+<span class="ln">273</span>            f"### {c['path']}:{c['start_line']}-{c['end_line']}\n```\n{c['content']}\n```"
+<span class="ln">274</span>            for c in project_chunks
+<span class="ln">275</span>        )
+</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SCENE: AUDIT LOG -->
+  <div class="scene" data-scene="audit" hidden>
+    <div class="auditScene">
+      <div class="auditBar">
+        <span style="color:var(--fg-2)">filter</span>
+        <span class="chip on">codebase-rag</span>
+        <span class="chip">session a8c41f6e</span>
+        <span class="chip">tool: <b style="color:var(--fg-0);margin-left:4px">any</b></span>
+        <span class="chip">event: <b style="color:var(--fg-0);margin-left:4px">any</b></span>
+        <span class="chip">since <b style="color:var(--fg-0);margin-left:4px">today</b></span>
+        <span style="margin-left:auto;color:var(--fg-2);font-size:11px">312 events · NDJSON at <code style="color:var(--accent)">~/.codebase-rag/meta/<wbr/>a8c41f6e/audit.log</code></span>
+      </div>
+      <div class="auditList">
+        <div class="ev">
+          <span class="ts">17:42:07.211</span><span class="kind toolcall">tool_call</span>
+          <span class="body"><b>edit_file</b>(<span class="arg">path="codebase_rag/chat.py"</span>, <span class="arg">old_string="…"</span>, <span class="arg">new_string="…"</span>)</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:42:07.398</span><span class="kind toolresult">tool_result</span>
+          <span class="body">edit_file → <span class="ok">ok:true</span> · path: <b>codebase_rag/chat.py</b> · 1 hunk applied · 0.19s</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:42:01.046</span><span class="kind toolcall">tool_call</span>
+          <span class="body"><b>read_file</b>(<span class="arg">path="codebase_rag/chat.py"</span>)</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:42:01.084</span><span class="kind toolresult">tool_result</span>
+          <span class="body">read_file → <span class="ok">ok:true</span> · 1018 lines · 35 KB · 38ms</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:41:58.502</span><span class="kind slash">slash_command</span>
+          <span class="body">:add <span class="arg">codebase_rag/chat.py</span> · pinned</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:41:58.501</span><span class="kind toolcall">tool_call</span>
+          <span class="body"><b>grep</b>(<span class="arg">pattern="UNTRUSTED_BEGIN"</span>, <span class="arg">literal=true</span>)</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:41:58.512</span><span class="kind toolresult">tool_result</span>
+          <span class="body">grep → <span class="ok">ok:true</span> · match_count: <b>7</b> · 11ms</span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:41:55.882</span><span class="kind declined">declined</span>
+          <span class="body"><b>run_shell</b>(<span class="arg">command="rm -rf node_modules"</span>) → <span class="err">user declined</span></span>
+        </div>
+        <div class="ev">
+          <span class="ts">17:41:42.301</span><span class="kind session">session_start</span>
+          <span class="body">provider=<b>ollama</b> · model=<b>qwen2.5-coder:7b</b> · read_only=<b>false</b> · allow_shell=<b>true</b> · allow_web=<b>false</b> · root=<b>~/code/codebase-rag</b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // Scene switcher — vanilla, keyboard accessible.
+  const buttons = document.querySelectorAll('.sceneBar button[data-scene]');
+  const scenes  = document.querySelectorAll('.scene[data-scene]');
+  function show(name){
+    buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scene === name)));
+    scenes.forEach(s => s.hidden = (s.dataset.scene !== name));
+  }
+  buttons.forEach(b => b.addEventListener('click', () => show(b.dataset.scene)));
+  // Left/Right arrow key navigation between scenes
+  document.querySelector('.sceneBar').addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const list = [...buttons];
+    const cur = list.findIndex(b => b.getAttribute('aria-pressed') === 'true');
+    const next = e.key === 'ArrowRight' ? (cur+1)%list.length : (cur-1+list.length)%list.length;
+    list[next].focus();
+    show(list[next].dataset.scene);
+  });
+</script>
+
+</body>
+</html>

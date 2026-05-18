@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codebase-rag — UI redesign</title>
+<style>
+  :root {
+    --bg-0:#0b0d10; --bg-1:#11141a; --bg-2:#181c24; --bg-3:#232834;
+    --border:#2a3140; --border-soft:#1c2230;
+    --fg-0:#e6e9ef; --fg-1:#a7b0bf; --fg-2:#6b7484; --fg-dim:#4a5263;
+    --accent:#7aa2f7; --accent-soft:#29406b;
+    --ok:#9ece6a; --warn:#e0af68; --danger:#f7768e; --info:#7dcfff; --purple:#bb9af7;
+    --mono: "JetBrains Mono", ui-monospace, SF Mono, Consolas, monospace;
+    --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--fg-0);font-family:var(--sans);line-height:1.6}
+  body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:40px 24px}
+  .page{width:min(960px,100%)}
+  h1{font-size:28px;margin:0 0 6px;font-weight:600}
+  .sub{color:var(--fg-2);font-size:15px;margin-bottom:32px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+  .card{background:var(--bg-1);border:1px solid var(--border);border-radius:10px;padding:20px;text-decoration:none;color:inherit;transition:transform .08s, border-color .12s;display:block}
+  .card:hover{transform:translateY(-2px);border-color:var(--accent)}
+  .card .tag{font-family:var(--mono);font-size:11px;color:var(--accent);text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;display:block}
+  .card h2{margin:0 0 6px;font-size:17px;font-weight:600}
+  .card p{margin:0;color:var(--fg-1);font-size:13px;line-height:1.55}
+  .card .meta{margin-top:14px;color:var(--fg-2);font-size:11px;font-family:var(--mono)}
+
+  .principles{background:var(--bg-1);border:1px solid var(--border);border-radius:10px;padding:22px 24px;margin-bottom:24px}
+  .principles h3{margin:0 0 12px;font-size:14px;text-transform:uppercase;letter-spacing:.08em;color:var(--fg-2);font-weight:600}
+  .principles ul{margin:0;padding-left:18px}
+  .principles li{margin-bottom:6px;color:var(--fg-1);font-size:14px}
+  .principles li b{color:var(--fg-0)}
+
+  .swatch{display:grid;grid-template-columns:repeat(8,1fr);gap:8px;margin-top:12px}
+  .sw{height:38px;border-radius:6px;border:1px solid var(--border-soft);display:flex;align-items:flex-end;justify-content:center;padding:3px;font-family:var(--mono);font-size:10px;color:var(--fg-2)}
+
+  .footer{color:var(--fg-2);font-size:12px;margin-top:30px;text-align:center}
+  .footer code{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--border-soft);border-radius:3px;padding:1px 6px;color:var(--fg-1)}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>codebase-rag — UI redesign</h1>
+  <div class="sub">A unified design system across CLI/TUI, browser, and desktop. Local-first; retrieval-transparent; every write reviewable.</div>
+
+  <div class="grid">
+    <a class="card" href="SPEC.md">
+      <span class="tag">spec</span>
+      <h2>Design spec</h2>
+      <p>Principles, information architecture, design tokens, key flows, and what desktop adds natively.</p>
+      <div class="meta">SPEC.md · markdown</div>
+    </a>
+    <a class="card" href="tui.html">
+      <span class="tag">mockup</span>
+      <h2>TUI (Textual)</h2>
+      <p>Full-screen terminal app. Three panes, slash-command picker, keyboard-first approvals, shield overlay.</p>
+      <div class="meta">tui.html · interactive</div>
+    </a>
+    <a class="card" href="browser.html">
+      <span class="tag">mockup</span>
+      <h2>Browser &amp; Desktop</h2>
+      <p>Shared web UI. Toggle the surface chrome (web vs desktop) to see the deltas: menu bar, global hotkey, notifications, file-watcher.</p>
+      <div class="meta">browser.html · interactive · toggle modes</div>
+    </a>
+  </div>
+
+  <div class="principles">
+    <h3>Design principles</h3>
+    <ul>
+      <li><b>Local-first is a feature, not fine print.</b> A persistent shield indicator shows what's leaving the machine.</li>
+      <li><b>Retrieval is visible by default.</b> Every assistant turn carries the chunks that grounded it, with scores and sources.</li>
+      <li><b>Every destructive action is reviewable.</b> Writes, edits, and shell commands surface as cards with approve / reject / edit.</li>
+      <li><b>The audit log is a first-class view</b>, not a debug aid — the receipt for everything the agent did.</li>
+      <li><b>One mental model across surfaces.</b> Same slash commands, same colors, same components in TUI, browser, and desktop.</li>
+      <li><b>Keyboard-first everywhere.</b> <code style="font-family:var(--mono)">⌘K</code> palette, slash commands, j/k navigation — mouse works but isn't required.</li>
+    </ul>
+  </div>
+
+  <div class="principles">
+    <h3>Token palette</h3>
+    <div class="swatch">
+      <div class="sw" style="background:#0b0d10">bg-0</div>
+      <div class="sw" style="background:#11141a">bg-1</div>
+      <div class="sw" style="background:#181c24">bg-2</div>
+      <div class="sw" style="background:#232834">bg-3</div>
+      <div class="sw" style="background:#7aa2f7;color:#0a1024">accent</div>
+      <div class="sw" style="background:#9ece6a;color:#0a1410">ok</div>
+      <div class="sw" style="background:#e0af68;color:#1a1500">warn</div>
+      <div class="sw" style="background:#f7768e;color:#1a0507">danger</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Source repo at <code>/Users/jorden/code/codebase-rag</code> · design files in <code>./design/</code>
+  </div>
+</div>
+</body>
+</html>

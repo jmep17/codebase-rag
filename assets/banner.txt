@@ -1,0 +1,5 @@
+  ━━━━━   ╲
+  ━━━      ╲    codebase-rag
+  ━━━━      ▶   local-first RAG + tools  ·  ollama
+  ━━━      ╱
+  ━━━━━   ╱

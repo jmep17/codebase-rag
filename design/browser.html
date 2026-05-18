@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>codebase-rag — Browser & Desktop mockup</title>
+<style>
+  :root {
+    --bg-0:#0b0d10; --bg-1:#11141a; --bg-2:#181c24; --bg-3:#232834;
+    --border:#2a3140; --border-soft:#1c2230;
+    --fg-0:#e6e9ef; --fg-1:#a7b0bf; --fg-2:#6b7484; --fg-dim:#4a5263;
+    --accent:#7aa2f7; --accent-soft:#29406b;
+    --ok:#9ece6a; --warn:#e0af68; --danger:#f7768e; --info:#7dcfff; --purple:#bb9af7;
+    --mono: "JetBrains Mono", ui-monospace, SF Mono, Consolas, monospace;
+    --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#000;color:var(--fg-0);font-family:var(--sans);font-size:14px;line-height:1.5}
+  body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+  .page{width:min(1280px,100%)}
+  .pageHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .pageHead h1{margin:0;font-size:18px;font-weight:600}
+  .pageHead .sub{color:var(--fg-2);font-size:13px;margin-top:2px}
+  .pageHead a{color:var(--accent);text-decoration:none;margin-left:16px;font-size:13px}
+  .pageHead a:hover{text-decoration:underline}
+
+  .toolbar{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+  .toolbar .seg{display:inline-flex;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;padding:2px;font-size:13px}
+  .toolbar .seg button{appearance:none;background:transparent;border:none;color:var(--fg-1);padding:5px 12px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:13px}
+  .toolbar .seg button.on{background:var(--accent-soft);color:var(--fg-0)}
+  .toolbar .hint{color:var(--fg-2);font-size:12px;margin-left:8px}
+
+  .app{background:var(--bg-0);border:1px solid var(--border);border-radius:10px;overflow:hidden;box-shadow:0 24px 48px rgba(0,0,0,.5);position:relative}
+
+  /* desktop chrome — menu bar + traffic lights */
+  .desktopChrome{display:none;align-items:center;gap:8px;padding:8px 14px;background:#0e1116;border-bottom:1px solid var(--border-soft)}
+  .desktopChrome.show{display:flex}
+  .desktopChrome .lights{display:flex;gap:7px;margin-right:14px}
+  .desktopChrome .lights span{width:12px;height:12px;border-radius:50%}
+  .desktopChrome .lights .r{background:#ff5f57}.desktopChrome .lights .y{background:#febc2e}.desktopChrome .lights .g{background:#28c840}
+  .desktopChrome .title{color:var(--fg-1);font-size:13px}
+  .desktopChrome .menu{margin-left:auto;color:var(--fg-2);font-size:12px;display:flex;gap:14px}
+  .desktopChrome .menu .badge{background:var(--warn);color:#1a1500;border-radius:10px;padding:1px 7px;font-weight:600;font-size:11px}
+
+  /* browser chrome — fake URL bar */
+  .browserChrome{display:none;align-items:center;gap:10px;padding:8px 14px;background:#0e1116;border-bottom:1px solid var(--border-soft)}
+  .browserChrome.show{display:flex}
+  .browserChrome .lights{display:flex;gap:7px;margin-right:8px}
+  .browserChrome .lights span{width:12px;height:12px;border-radius:50%}
+  .browserChrome .lights .r{background:#ff5f57}.browserChrome .lights .y{background:#febc2e}.browserChrome .lights .g{background:#28c840}
+  .browserChrome .nav{color:var(--fg-dim);font-size:13px;display:flex;gap:8px;margin-right:10px}
+  .browserChrome .url{flex:1;background:var(--bg-2);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-family:var(--mono);font-size:12px;color:var(--fg-1)}
+  .browserChrome .url .lock{color:var(--ok);margin-right:6px}
+
+  /* top app bar */
+  .topbar{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--bg-1);border-bottom:1px solid var(--border-soft);font-size:13px;color:var(--fg-1)}
+  .pill{display:inline-flex;align-items:center;gap:6px;cursor:pointer;padding:3px 8px;border-radius:6px}
+  .pill:hover{background:var(--bg-2)}
+  .pillDot{width:8px;height:8px;border-radius:50%}
+  .pillDot.ok{background:var(--ok)}.pillDot.warn{background:var(--warn)}.pillDot.danger{background:var(--danger)}
+  .pill b{color:var(--fg-0);font-weight:600}
+  .sep{color:var(--fg-dim)}
+  .topbar .right{margin-left:auto;color:var(--fg-2);display:flex;gap:14px;align-items:center}
+  .topbar .right .k{font-family:var(--mono);font-size:11px;color:var(--fg-1);background:var(--bg-2);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin-left:4px}
+
+  /* main grid */
+  .grid{display:grid;grid-template-columns:240px 1fr 280px;height:740px;min-height:0}
+  .col{display:flex;flex-direction:column;overflow:hidden;border-right:1px solid var(--border-soft)}
+  .col:last-child{border-right:none}
+
+  /* left nav */
+  .nav{padding:14px 12px;overflow-y:auto;background:var(--bg-1)}
+  .navH{color:var(--fg-2);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin:14px 4px 6px}
+  .navH:first-child{margin-top:0}
+  .navItem{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;color:var(--fg-1)}
+  .navItem:hover{background:var(--bg-2)}
+  .navItem.on{background:var(--accent-soft);color:var(--fg-0)}
+  .navItem .ic{width:14px;color:var(--fg-2)}
+  .navItem.on .ic{color:var(--accent)}
+  .proj{padding:8px 8px;border-radius:6px;cursor:pointer;margin-bottom:2px}
+  .proj.on{background:var(--accent-soft)}
+  .proj .name{font-weight:500;font-size:13px}
+  .proj .meta{color:var(--fg-2);font-size:12px;margin-top:2px}
+  .indexBtn{margin-top:10px;width:100%;background:transparent;color:var(--accent);border:1px dashed var(--border);border-radius:6px;padding:6px 8px;cursor:pointer;font-family:inherit;font-size:12px;text-align:left}
+  .indexBtn:hover{background:var(--bg-2)}
+
+  /* center: chat */
+  .center{display:flex;flex-direction:column;min-height:0;background:var(--bg-0)}
+  .chat{flex:1;overflow-y:auto;padding:18px 22px}
+  .turn{margin-bottom:22px}
+  .userTurn{display:flex;gap:10px;margin-bottom:10px}
+  .userTurn .ava{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#0a1024;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0}
+  .userTurn .msg{background:var(--bg-2);border:1px solid var(--border-soft);border-radius:6px 16px 16px 16px;padding:8px 12px;color:var(--fg-0)}
+
+  .card{border:1px solid var(--border-soft);border-radius:8px;margin:10px 0;background:var(--bg-1);overflow:hidden}
+  .card.retrieval{border-left:3px solid var(--info)}
+  .card.tool{border-left:3px solid var(--purple)}
+  .card.edit{border-left:3px solid var(--warn)}
+  .card.edit.approved{border-left-color:var(--ok)}
+  .card.shell{border-left:3px solid var(--purple)}
+
+  .cardHead{display:flex;align-items:center;gap:10px;padding:10px 12px;color:var(--fg-1);font-size:13px;cursor:pointer}
+  .cardHead .ic{display:inline-block;width:14px;text-align:center}
+  .cardHead .ic.info{color:var(--info)}
+  .cardHead .ic.purp{color:var(--purple)}
+  .cardHead .ic.warn{color:var(--warn)}
+  .cardHead .ic.ok{color:var(--ok)}
+  .cardHead .meta{margin-left:auto;color:var(--fg-2);font-size:12px}
+  .cardBody{padding:0 12px 12px;font-family:var(--mono);font-size:12px;color:var(--fg-1)}
+
+  .pills{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 12px}
+  .chunkPill{display:inline-flex;align-items:center;gap:8px;background:var(--bg-2);border:1px solid var(--border);border-radius:14px;padding:3px 10px;font-family:var(--mono);font-size:11px;color:var(--fg-1);cursor:pointer}
+  .chunkPill:hover{background:var(--bg-3)}
+  .chunkPill .path{color:var(--info)}
+  .chunkPill .score{color:var(--fg-2)}
+  .chunkPill .ref{color:var(--warn);font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+
+  .answer{background:var(--bg-1);border:1px solid var(--border-soft);border-radius:8px;padding:12px 14px;color:var(--fg-0);font-family:var(--sans);font-size:14px;line-height:1.6}
+  .answer code{font-family:var(--mono);background:var(--bg-2);border:1px solid var(--border-soft);border-radius:3px;padding:1px 5px;font-size:12px;color:var(--accent)}
+  .answer .cite{color:var(--info);font-family:var(--mono);font-size:11px;text-decoration:none;border-bottom:1px dotted var(--info);padding-bottom:0px}
+  .answer pre{background:var(--bg-2);border:1px solid var(--border-soft);border-radius:6px;padding:10px 12px;color:var(--fg-0);font-family:var(--mono);font-size:12px;overflow-x:auto;margin:10px 0}
+
+  /* diff inside edit card */
+  .diff{font-family:var(--mono);font-size:12px;line-height:1.55;background:#0a0d12;border:1px solid var(--border-soft);border-radius:6px;margin:0 12px 12px;overflow:hidden}
+  .diff .row{display:grid;grid-template-columns:42px 42px 1fr;padding:0;border-bottom:1px solid var(--border-soft)}
+  .diff .row:last-child{border-bottom:none}
+  .diff .gutter{color:var(--fg-dim);text-align:right;padding:2px 8px;background:#0f1318;user-select:none;font-size:11px}
+  .diff .line{padding:2px 12px;white-space:pre;color:var(--fg-1)}
+  .diff .row.minus{background:rgba(247,118,142,.08)}.diff .row.minus .line{color:var(--danger)}
+  .diff .row.plus{background:rgba(158,206,106,.08)}.diff .row.plus .line{color:var(--ok)}
+  .diff .row.ctx .line{color:var(--fg-2)}
+
+  .actions{display:flex;gap:8px;padding:0 12px 12px;align-items:center}
+  .btn{appearance:none;border:1px solid var(--border);background:var(--bg-2);color:var(--fg-0);border-radius:6px;padding:6px 12px;font-family:inherit;font-size:13px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+  .btn:hover{background:var(--bg-3)}
+  .btn.primary{background:var(--ok);color:#0a1410;border-color:var(--ok);font-weight:600}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.danger{background:transparent;color:var(--danger);border-color:rgba(247,118,142,.4)}
+  .btn.danger:hover{background:rgba(247,118,142,.12)}
+  .btn.ghost{background:transparent;color:var(--fg-1)}
+  .actions .right{margin-left:auto;color:var(--fg-2);font-size:12px;display:flex;gap:10px;align-items:center}
+  .actions .why{color:var(--info);cursor:pointer;font-size:12px;text-decoration:underline;text-decoration-style:dotted}
+
+  .approved-banner{background:rgba(158,206,106,.08);color:var(--ok);padding:8px 12px;font-size:12px;border-top:1px solid rgba(158,206,106,.2);display:none}
+  .card.edit.approved .approved-banner{display:block}
+
+  /* composer */
+  .composer{border-top:1px solid var(--border-soft);background:var(--bg-1);padding:10px 16px}
+  .pinChips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+  .pinChip{background:var(--bg-2);border:1px solid var(--border-soft);border-radius:14px;padding:2px 10px;font-family:var(--mono);font-size:11px;color:var(--fg-1);display:inline-flex;gap:6px;align-items:center}
+  .pinChip .x{color:var(--fg-dim);cursor:pointer}
+  .pinChip .x:hover{color:var(--danger)}
+  .composer .field{display:flex;align-items:flex-start;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+  .composer .field:focus-within{border-color:var(--accent)}
+  .composer textarea{flex:1;background:transparent;border:none;outline:none;color:var(--fg-0);font-family:var(--sans);font-size:14px;resize:none;min-height:46px;line-height:1.5}
+  .composer .send{align-self:flex-end;background:var(--accent);color:#0a1024;border:none;border-radius:6px;padding:6px 12px;font-weight:600;cursor:pointer;margin-left:8px}
+  .composer .meta{display:flex;justify-content:space-between;align-items:center;margin-top:6px;color:var(--fg-2);font-size:12px}
+  .composer .meta .k{font-family:var(--mono);font-size:11px;color:var(--fg-1);background:var(--bg-2);border:1px solid var(--border);border-radius:3px;padding:1px 5px;margin:0 4px}
+
+  /* right context */
+  .right-col{padding:14px 14px;overflow-y:auto;background:var(--bg-1)}
+  .panel{margin-bottom:18px}
+  .panelH{display:flex;justify-content:space-between;align-items:center;color:var(--fg-2);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+  .panelH .a{color:var(--accent);font-size:11px;text-transform:none;letter-spacing:0;cursor:pointer}
+  .row{display:flex;justify-content:space-between;padding:4px 0;color:var(--fg-1);font-size:13px}
+  .row .path{font-family:var(--mono);font-size:12px}
+  .row .x{color:var(--fg-dim);cursor:pointer;padding:0 4px}
+  .row .x:hover{color:var(--danger)}
+  .row .tag{font-size:11px;color:var(--info)}
+  .notes{color:var(--fg-1);font-size:12px;line-height:1.55;background:var(--bg-2);border:1px solid var(--border-soft);border-radius:6px;padding:8px 10px}
+
+  /* shield panel */
+  .shield{position:absolute;top:62px;left:16px;width:380px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;box-shadow:0 16px 36px rgba(0,0,0,.6);padding:14px;z-index:6;display:none}
+  .shield.open{display:block}
+  .shield h4{margin:0 0 10px;font-size:13px;font-weight:600}
+  .shield p{margin:0 0 12px;color:var(--fg-1);font-size:13px;line-height:1.5}
+  .sRow{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border-soft);font-size:13px}
+  .sRow:first-of-type{border-top:none}
+  .sRow .label{color:var(--fg-1)}
+  .sRow .v{color:var(--ok);font-family:var(--mono);font-size:12px}
+  .sRow.warn .v{color:var(--warn)}
+  .sRow.off .v{color:var(--fg-dim)}
+  .toggle{appearance:none;width:32px;height:18px;background:var(--bg-3);border:1px solid var(--border);border-radius:10px;position:relative;cursor:pointer;outline:none}
+  .toggle::after{content:"";position:absolute;left:1px;top:1px;width:14px;height:14px;background:var(--fg-2);border-radius:50%;transition:transform .12s}
+  .toggle.on{background:var(--accent-soft);border-color:var(--accent)}
+  .toggle.on::after{transform:translateX(14px);background:var(--accent)}
+
+  /* desktop quick-bar (global hotkey) */
+  .quickbar{position:absolute;left:50%;top:90px;transform:translateX(-50%);width:520px;background:rgba(15,18,24,.95);backdrop-filter:blur(10px);border:1px solid var(--border);border-radius:12px;padding:14px;box-shadow:0 24px 60px rgba(0,0,0,.7);z-index:7;display:none}
+  .quickbar.open{display:block}
+  .quickbar .label{color:var(--fg-2);font-size:11px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;display:flex;justify-content:space-between}
+  .quickbar input{width:100%;background:transparent;border:none;outline:none;color:var(--fg-0);font-family:var(--sans);font-size:16px;padding:6px 0}
+  .quickbar .hint{color:var(--fg-2);font-size:12px;margin-top:8px}
+
+  /* notification toast (desktop-only) */
+  .toast{position:absolute;top:60px;right:20px;background:#1c2230;border:1px solid var(--border);border-radius:10px;padding:12px 14px;width:300px;box-shadow:0 12px 36px rgba(0,0,0,.6);font-size:13px;z-index:5;display:none;animation:slideIn .2s}
+  .toast.show{display:block}
+  .toast .h{display:flex;justify-content:space-between;color:var(--fg-0);font-weight:600;margin-bottom:4px;font-size:13px}
+  .toast .b{color:var(--fg-1);font-size:12px}
+  .toast .src{color:var(--fg-dim);font-size:11px;margin-top:6px}
+  @keyframes slideIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+
+  .desktopOnly{display:none}
+  body.desktopMode .desktopOnly{display:flex}
+
+  /* labels marking desktop-specific UI */
+  .deltaBadge{display:inline-flex;align-items:center;gap:4px;background:rgba(122,162,247,.12);border:1px solid rgba(122,162,247,.3);color:var(--accent);font-size:10px;text-transform:uppercase;letter-spacing:.06em;padding:1px 6px;border-radius:10px;margin-left:6px}
+
+  /* retrieval inspector overlay */
+  .inspector{position:absolute;inset:0;background:rgba(11,13,16,.96);z-index:8;display:none;flex-direction:column}
+  .inspector.open{display:flex}
+  .inspector .head{display:flex;align-items:center;padding:12px 18px;border-bottom:1px solid var(--border);gap:14px}
+  .inspector .head h3{margin:0;font-size:14px;font-weight:600}
+  .inspector .head .close{margin-left:auto;color:var(--fg-2);cursor:pointer;background:transparent;border:none;font-size:18px}
+  .inspector .body{flex:1;display:grid;grid-template-columns:340px 1fr;min-height:0}
+  .inspector .list{border-right:1px solid var(--border);overflow-y:auto;padding:10px 12px}
+  .inspector .file{padding:10px 14px;overflow-y:auto;font-family:var(--mono);font-size:12px;line-height:1.55}
+  .inspector .item{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:4px}
+  .inspector .item.on{background:var(--accent-soft)}
+  .inspector .item .p{font-family:var(--mono);font-size:12px;color:var(--info)}
+  .inspector .item .s{color:var(--fg-2);font-size:11px;display:flex;justify-content:space-between;margin-top:2px}
+  .inspector .file .ln{color:var(--fg-dim);user-select:none;display:inline-block;width:32px;text-align:right;margin-right:14px}
+  .inspector .file .hi{background:rgba(122,162,247,.1)}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="pageHead">
+    <div>
+      <h1>codebase-rag — Browser &amp; Desktop mockup</h1>
+      <div class="sub">Same UI bundle. Desktop adds menu bar, global hotkey, notifications, file-watcher status. Toggle between surfaces below.</div>
+    </div>
+    <div>
+      <a href="index.html">← back to index</a>
+      <a href="tui.html">TUI →</a>
+      <a href="SPEC.md">spec</a>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="seg">
+      <button id="modeBrowser" class="on">Browser</button>
+      <button id="modeDesktop">Desktop</button>
+    </div>
+    <span class="hint">Try: click the shield · click a chunk pill · approve the pending edit · in Desktop mode, hit <code style="font-family:var(--mono)">⌥⇧Space</code> for the global quick-bar</span>
+  </div>
+
+  <div class="app" id="app">
+    <!-- desktop chrome -->
+    <div class="desktopChrome" id="desktopChrome">
+      <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+      <div class="title">codebase-rag · my-app</div>
+      <div class="menu">
+        <span>File</span><span>Edit</span><span>View</span><span>Project</span><span>Audit</span><span>Help</span>
+        <span style="display:flex;align-items:center;gap:6px;margin-left:18px"><span class="badge" id="dockBadge">1</span><span style="color:var(--fg-1)">pending</span></span>
+      </div>
+    </div>
+
+    <!-- browser chrome -->
+    <div class="browserChrome show" id="browserChrome">
+      <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+      <div class="nav">←  →  ↻</div>
+      <div class="url"><span class="lock">⚿</span>127.0.0.1:8723/chat/my-app</div>
+    </div>
+
+    <!-- top app bar -->
+    <div class="topbar">
+      <span class="pill" id="shieldBtn">
+        <span class="pillDot ok" id="postureDot"></span>
+        <b id="postureLabel">Local</b>
+      </span>
+      <span class="sep">·</span>
+      <span>mistral-nemo</span>
+      <span class="sep">·</span>
+      <span>read+write</span>
+      <span class="sep">·</span>
+      <span>shell: <span style="color:var(--fg-dim)">off</span></span>
+      <span class="sep">·</span>
+      <span>web: <span style="color:var(--fg-dim)">off</span></span>
+      <span class="sep">·</span>
+      <span style="color:var(--fg-2)">4,231 chunks</span>
+      <div class="right">
+        <span class="desktopOnly" title="File watcher (desktop-only)"><span class="pillDot ok"></span>watching files</span>
+        <span>session 3f8c</span>
+        <span>⌘K<span class="k">cmd palette</span></span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <!-- left nav -->
+      <aside class="col nav">
+        <div class="navH">Views</div>
+        <div class="navItem on"><span class="ic">💬</span>Chat</div>
+        <div class="navItem"><span class="ic">🔎</span>Search</div>
+        <div class="navItem"><span class="ic">📂</span>Index &amp; references</div>
+        <div class="navItem"><span class="ic">📜</span>Audit</div>
+        <div class="navItem"><span class="ic">⚙</span>Settings</div>
+
+        <div class="navH">Projects</div>
+        <div class="proj on">
+          <div class="name">my-app</div>
+          <div class="meta">312 chunks · 1 reference</div>
+        </div>
+        <div class="proj">
+          <div class="name">other-project</div>
+          <div class="meta">1,142 chunks</div>
+        </div>
+        <div class="proj">
+          <div class="name">scratch</div>
+          <div class="meta">86 chunks</div>
+        </div>
+        <button class="indexBtn" id="indexBtn">+ Index a folder</button>
+
+        <div class="navH desktopOnly">Native</div>
+        <div class="navItem desktopOnly"><span class="ic">⌥⇧</span>Global hotkey<span class="deltaBadge">desktop</span></div>
+        <div class="navItem desktopOnly"><span class="ic">🔔</span>Notifications<span class="deltaBadge">desktop</span></div>
+      </aside>
+
+      <!-- center: chat -->
+      <main class="col center">
+        <div class="chat" id="chat">
+          <!-- turn 1 -->
+          <div class="turn">
+            <div class="userTurn">
+              <div class="ava">J</div>
+              <div class="msg">how does the auth middleware work?</div>
+            </div>
+
+            <div class="card retrieval" id="retCard">
+              <div class="cardHead" id="retHead">
+                <span class="ic info">⟢</span>
+                <span><b style="color:var(--fg-0)">5 chunks retrieved</b> · 124 ms · ranked by cosine</span>
+                <span class="meta">click any chunk to inspect</span>
+              </div>
+              <div class="pills">
+                <span class="chunkPill"><span class="path">src/middleware/auth.ts</span><span style="color:var(--fg-dim)">:1-48</span><span class="score">0.82</span></span>
+                <span class="chunkPill"><span class="path">src/middleware/auth.ts</span><span style="color:var(--fg-dim)">:48-94</span><span class="score">0.79</span></span>
+                <span class="chunkPill"><span class="path">src/lib/jwt.ts</span><span style="color:var(--fg-dim)">:12-44</span><span class="score">0.71</span></span>
+                <span class="chunkPill"><span class="path">src/routes/api.ts</span><span style="color:var(--fg-dim)">:1-22</span><span class="score">0.64</span></span>
+                <span class="chunkPill"><span class="ref">ref·api-spec</span><span class="path">oauth-flow.md</span><span style="color:var(--fg-dim)">:1-40</span><span class="score">0.59</span></span>
+              </div>
+            </div>
+
+            <div class="answer">
+              The auth middleware verifies JWT tokens on every request to <code>/api/*</code>. It reads the token from the <code>session</code> cookie via <code>getToken()</code>, then calls <code>verifyToken</code> (from <code>src/lib/jwt.ts</code>) with the configured secret. On failure it returns 401 immediately. On success it attaches <code>req.user</code> and continues.
+              <div style="margin-top:8px;color:var(--fg-2);font-size:12px">Cited: <a class="cite">src/middleware/auth.ts:1-48</a> · <a class="cite">src/lib/jwt.ts:12-44</a></div>
+            </div>
+
+            <div class="card tool">
+              <div class="cardHead">
+                <span class="ic purp">─</span>
+                <span><b style="color:var(--fg-0)">tool</b> · read_file(<code style="font-family:var(--mono);color:var(--info)">src/middleware/auth.ts</code>)</span>
+                <span class="meta">230 lines · 18 ms · ok</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- turn 2: pending edit -->
+          <div class="turn">
+            <div class="userTurn">
+              <div class="ava">J</div>
+              <div class="msg">add a JSDoc to verifyToken explaining what it returns on failure</div>
+            </div>
+
+            <div class="card edit" id="editCard">
+              <div class="cardHead">
+                <span class="ic warn">✎</span>
+                <span><b style="color:var(--fg-0)">proposed edit</b> · <code style="font-family:var(--mono);color:var(--info)">src/middleware/auth.ts</code></span>
+                <span class="meta">awaiting approval</span>
+              </div>
+              <div class="diff">
+                <div class="row ctx"><div class="gutter">41</div><div class="gutter">41</div><div class="line">  import { jwtVerify } from "jose";</div></div>
+                <div class="row ctx"><div class="gutter">42</div><div class="gutter">42</div><div class="line"> </div></div>
+                <div class="row minus"><div class="gutter">43</div><div class="gutter"></div><div class="line">  export function verifyToken(req: Request) {</div></div>
+                <div class="row plus"><div class="gutter"></div><div class="gutter">43</div><div class="line">  /**</div></div>
+                <div class="row plus"><div class="gutter"></div><div class="gutter">44</div><div class="line">   * Verify a JWT pulled from req cookies.</div></div>
+                <div class="row plus"><div class="gutter"></div><div class="gutter">45</div><div class="line">   * @returns the decoded payload, or `null` if the token is</div></div>
+                <div class="row plus"><div class="gutter"></div><div class="gutter">46</div><div class="line">   *   missing, expired, or fails signature verification.</div></div>
+                <div class="row plus"><div class="gutter"></div><div class="gutter">47</div><div class="line">   */</div></div>
+                <div class="row plus"><div class="gutter"></div><div class="gutter">48</div><div class="line">  export function verifyToken(req: Request) {</div></div>
+                <div class="row ctx"><div class="gutter">44</div><div class="gutter">49</div><div class="line">    const token = getToken(req);</div></div>
+              </div>
+              <div class="actions">
+                <button class="btn primary" id="approveBtn">Approve &amp; write</button>
+                <button class="btn danger" id="rejectBtn">Reject</button>
+                <button class="btn ghost">Open in editor</button>
+                <span class="right">
+                  <span class="why" title="Show which retrieved chunks led to this edit">why this edit?</span>
+                  <span>+6 / −1</span>
+                </span>
+              </div>
+              <div class="approved-banner" id="approvedBanner">
+                ✓ Written to disk · re-indexed (47 chunks → 48) · audit logged
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- composer -->
+        <div class="composer">
+          <div class="pinChips">
+            <span class="pinChip">📌 src/auth.ts <span class="x">×</span></span>
+            <span class="pinChip">📌 src/mw.ts <span class="x">×</span></span>
+            <span style="color:var(--fg-dim);font-size:11px;align-self:center">pinned files — sent every turn</span>
+          </div>
+          <div class="field">
+            <textarea placeholder="Ask anything, or type :  for slash commands. ⌘↵ to send."></textarea>
+            <button class="send">Send</button>
+          </div>
+          <div class="meta">
+            <span>Try slash commands: <code style="font-family:var(--mono);color:var(--info)">:add</code> <code style="font-family:var(--mono);color:var(--info)">:diff</code> <code style="font-family:var(--mono);color:var(--info)">:commit</code> <code style="font-family:var(--mono);color:var(--info)">:undo</code></span>
+            <span><span class="k">⌘↵</span> send · <span class="k">↵</span> newline</span>
+          </div>
+        </div>
+      </main>
+
+      <!-- right context -->
+      <aside class="col right-col">
+        <div class="panel">
+          <div class="panelH"><span>Retrieval focus</span><span class="a" id="openInspector">expand →</span></div>
+          <div style="color:var(--fg-1);font-size:12px;line-height:1.6">
+            5 chunks from current turn, top score 0.82.<br>
+            Source: <span style="color:var(--info)">4 project</span> + <span style="color:var(--warn)">1 reference (api-spec)</span>.
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panelH"><span>Pinned</span><span class="a">+ add</span></div>
+          <div class="row"><span class="path">src/auth.ts</span><span class="x">×</span></div>
+          <div class="row"><span class="path">src/mw.ts</span><span class="x">×</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="panelH"><span>References</span><span class="a">+ add</span></div>
+          <div class="row"><span><span class="tag">api-spec</span> &nbsp;<span style="color:var(--fg-2);font-size:12px">412 chunks</span></span><span class="x">×</span></div>
+        </div>
+
+        <div class="panel">
+          <div class="panelH"><span>Project notes</span><span class="a">edit</span></div>
+          <div class="notes">React + Vite app, Postgres. Use snake_case in DB. Avoid touching legacy/v1 unless asked.</div>
+        </div>
+
+        <div class="panel">
+          <div class="panelH"><span>Git</span><span style="color:var(--fg-dim);font-size:11px">branch main</span></div>
+          <div class="row"><span style="color:var(--warn)">2 files dirty</span><span class="a">:diff</span></div>
+          <div class="row"><span style="color:var(--fg-2);font-family:var(--mono);font-size:11px">a3f8b1 chore: lint</span></div>
+        </div>
+
+        <div class="panel desktopOnly">
+          <div class="panelH"><span>System <span class="deltaBadge">desktop</span></span></div>
+          <div class="row"><span style="color:var(--fg-2);font-size:12px">File watcher</span><span style="color:var(--ok);font-size:12px">on</span></div>
+          <div class="row"><span style="color:var(--fg-2);font-size:12px">Notifications</span><span style="color:var(--ok);font-size:12px">on</span></div>
+          <div class="row"><span style="color:var(--fg-2);font-size:12px">Global hotkey</span><span style="color:var(--fg-1);font-family:var(--mono);font-size:11px">⌥⇧Space</span></div>
+          <div class="row"><span style="color:var(--fg-2);font-size:12px">Auto-start</span><span style="color:var(--fg-dim);font-size:12px">off</span></div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- shield panel overlay -->
+    <div class="shield" id="shield">
+      <h4>Network surface <span style="color:var(--ok);font-weight:500;font-size:12px">· Local only</span></h4>
+      <p>Right now, nothing leaves this machine. Chat goes to Ollama at <code style="font-family:var(--mono);color:var(--info)">127.0.0.1:11434</code>. Embeddings stay local.</p>
+      <div class="sRow"><span class="label">Chat provider</span><span class="v">ollama (local)</span></div>
+      <div class="sRow off"><span class="label">Web search/fetch <code style="font-family:var(--mono);font-size:11px;color:var(--fg-dim)">--allow-web</code></span><button class="toggle" data-toggle="web"></button></div>
+      <div class="sRow off"><span class="label">Shell tool <code style="font-family:var(--mono);font-size:11px;color:var(--fg-dim)">--allow-shell</code></span><button class="toggle" data-toggle="shell"></button></div>
+      <div class="sRow"><span class="label">Write/edit confirmations <code style="font-family:var(--mono);font-size:11px;color:var(--fg-dim)">--confirm-writes</code></span><button class="toggle" data-toggle="confirm"></button></div>
+      <div class="sRow"><span class="label">Read-only mode <code style="font-family:var(--mono);font-size:11px;color:var(--fg-dim)">--read-only</code></span><button class="toggle" data-toggle="ro"></button></div>
+      <div style="margin-top:14px;display:flex;justify-content:space-between;align-items:center">
+        <a class="cite" style="cursor:pointer">View audit log →</a>
+        <span style="color:var(--fg-dim);font-size:11px">5 events today</span>
+      </div>
+    </div>
+
+    <!-- desktop-only: global quick-bar -->
+    <div class="quickbar desktopOnly" id="quickbar">
+      <div class="label">
+        <span>Global quick-bar · ⌥⇧Space</span>
+        <span style="color:var(--fg-dim)">project: my-app · inferred from frontmost folder</span>
+      </div>
+      <input placeholder="Ask anything in your codebase..." />
+      <div class="hint">↵ to send · esc to dismiss · result returns here, or click ↗ to open in full app</div>
+    </div>
+
+    <!-- desktop-only: notification toast -->
+    <div class="toast desktopOnly" id="toast">
+      <div class="h"><span>codebase-rag</span><span style="color:var(--fg-dim);font-weight:400;font-size:11px">now</span></div>
+      <div class="b">3 edits awaiting approval in <b style="color:var(--fg-0)">my-app</b>.</div>
+      <div class="src">click to open · system notification</div>
+    </div>
+
+    <!-- retrieval inspector overlay -->
+    <div class="inspector" id="inspector">
+      <div class="head">
+        <h3>Retrieval inspector</h3>
+        <span style="color:var(--fg-2);font-size:12px">query: "how does the auth middleware work?" · 5 chunks · 124 ms</span>
+        <button class="close" id="closeInspector">×</button>
+      </div>
+      <div class="body">
+        <div class="list">
+          <div class="item on">
+            <div class="p">src/middleware/auth.ts:1-48</div>
+            <div class="s"><span>project</span><span>0.82</span></div>
+          </div>
+          <div class="item">
+            <div class="p">src/middleware/auth.ts:48-94</div>
+            <div class="s"><span>project</span><span>0.79</span></div>
+          </div>
+          <div class="item">
+            <div class="p">src/lib/jwt.ts:12-44</div>
+            <div class="s"><span>project</span><span>0.71</span></div>
+          </div>
+          <div class="item">
+            <div class="p">src/routes/api.ts:1-22</div>
+            <div class="s"><span>project</span><span>0.64</span></div>
+          </div>
+          <div class="item">
+            <div class="p" style="color:var(--warn)">api-spec/oauth-flow.md:1-40</div>
+            <div class="s"><span>reference</span><span>0.59</span></div>
+          </div>
+          <div style="margin-top:14px;display:flex;gap:6px">
+            <button class="btn ghost" style="font-size:12px">Filter by file…</button>
+            <button class="btn ghost" style="font-size:12px">Re-rank by file</button>
+          </div>
+        </div>
+        <div class="file">
+          <div style="color:var(--fg-2);margin-bottom:8px;font-family:var(--sans);font-size:12px">src/middleware/auth.ts &nbsp;·&nbsp; showing lines 1-58 (highlight = retrieved chunk)</div>
+<div><span class="ln">1</span><span class="hi">import { jwtVerify } from "jose";</span></div>
+<div><span class="ln">2</span><span class="hi">import { cookies } from "next/headers";</span></div>
+<div><span class="ln">3</span><span class="hi"></span></div>
+<div><span class="ln">4</span><span class="hi">const SECRET = process.env.AUTH_SECRET;</span></div>
+<div><span class="ln">5</span><span class="hi"></span></div>
+<div><span class="ln">6</span><span class="hi">export async function authMiddleware(req: Request, ctx: Ctx) {</span></div>
+<div><span class="ln">7</span><span class="hi">  if (!req.url.startsWith("/api/")) return ctx.next();</span></div>
+<div><span class="ln">8</span><span class="hi">  const token = cookies().get("session")?.value;</span></div>
+<div><span class="ln">9</span><span class="hi">  if (!token) return new Response("unauthorized", { status: 401 });</span></div>
+<div><span class="ln">10</span><span class="hi">  const payload = await verifyToken(req);</span></div>
+<div><span class="ln">11</span><span class="hi">  if (!payload) return new Response("unauthorized", { status: 401 });</span></div>
+<div><span class="ln">12</span><span class="hi">  ctx.user = payload;</span></div>
+<div><span class="ln">13</span><span class="hi">  return ctx.next();</span></div>
+<div><span class="ln">14</span><span class="hi">}</span></div>
+<div><span class="ln">15</span><span style="color:var(--fg-dim)">// ... lines 15-40 trimmed</span></div>
+<div><span class="ln">41</span>  import { jwtVerify } from "jose";</div>
+<div><span class="ln">42</span> </div>
+<div><span class="ln">43</span>  export function verifyToken(req: Request) {</div>
+<div><span class="ln">44</span>    const token = getToken(req);</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const app = document.getElementById('app');
+  const modeBrowser = document.getElementById('modeBrowser');
+  const modeDesktop = document.getElementById('modeDesktop');
+  const desktopChrome = document.getElementById('desktopChrome');
+  const browserChrome = document.getElementById('browserChrome');
+  const shield = document.getElementById('shield');
+  const shieldBtn = document.getElementById('shieldBtn');
+  const postureDot = document.getElementById('postureDot');
+  const postureLabel = document.getElementById('postureLabel');
+  const editCard = document.getElementById('editCard');
+  const approveBtn = document.getElementById('approveBtn');
+  const rejectBtn = document.getElementById('rejectBtn');
+  const approvedBanner = document.getElementById('approvedBanner');
+  const dockBadge = document.getElementById('dockBadge');
+  const inspector = document.getElementById('inspector');
+  const openInspector = document.getElementById('openInspector');
+  const closeInspector = document.getElementById('closeInspector');
+  const retHead = document.getElementById('retHead');
+  const quickbar = document.getElementById('quickbar');
+  const toast = document.getElementById('toast');
+
+  function setMode(desktop) {
+    document.body.classList.toggle('desktopMode', desktop);
+    modeBrowser.classList.toggle('on', !desktop);
+    modeDesktop.classList.toggle('on', desktop);
+    browserChrome.classList.toggle('show', !desktop);
+    desktopChrome.classList.toggle('show', desktop);
+    if (desktop) {
+      setTimeout(() => toast.classList.add('show'), 300);
+      setTimeout(() => toast.classList.remove('show'), 4500);
+    } else {
+      toast.classList.remove('show');
+      quickbar.classList.remove('open');
+    }
+  }
+  modeBrowser.addEventListener('click', () => setMode(false));
+  modeDesktop.addEventListener('click', () => setMode(true));
+
+  shieldBtn.addEventListener('click', () => shield.classList.toggle('open'));
+  document.addEventListener('click', (e) => {
+    if (!shield.contains(e.target) && !shieldBtn.contains(e.target)) shield.classList.remove('open');
+  });
+
+  // toggles
+  document.querySelectorAll('.toggle').forEach(t => {
+    t.addEventListener('click', (e) => {
+      e.stopPropagation();
+      t.classList.toggle('on');
+      // posture update
+      const web = document.querySelector('[data-toggle="web"]').classList.contains('on');
+      const anth = false;
+      if (anth) { postureDot.className='pillDot danger'; postureLabel.textContent='+ Anthropic'; postureLabel.style.color='var(--danger)'; }
+      else if (web) { postureDot.className='pillDot warn'; postureLabel.textContent='+ Web'; postureLabel.style.color='var(--warn)'; }
+      else { postureDot.className='pillDot ok'; postureLabel.textContent='Local'; postureLabel.style.color='var(--ok)'; }
+    });
+  });
+
+  approveBtn.addEventListener('click', () => {
+    editCard.classList.add('approved');
+    approveBtn.disabled = true; rejectBtn.disabled = true;
+    approveBtn.textContent = 'Approved';
+    approveBtn.style.opacity = .7;
+    dockBadge.textContent = '0';
+    dockBadge.style.background = 'var(--ok)';
+  });
+  rejectBtn.addEventListener('click', () => {
+    editCard.style.opacity = .55;
+    rejectBtn.disabled = true; approveBtn.disabled = true;
+    rejectBtn.textContent = 'Rejected · model will retry';
+    dockBadge.textContent = '0';
+  });
+
+  openInspector.addEventListener('click', () => inspector.classList.add('open'));
+  retHead.addEventListener('click', () => inspector.classList.add('open'));
+  closeInspector.addEventListener('click', () => inspector.classList.remove('open'));
+
+  // global hotkey only in desktop mode
+  document.addEventListener('keydown', (e) => {
+    if (e.key === ' ' && e.altKey && e.shiftKey && document.body.classList.contains('desktopMode')) {
+      e.preventDefault();
+      quickbar.classList.toggle('open');
+      if (quickbar.classList.contains('open')) quickbar.querySelector('input').focus();
+    }
+    if (e.key === 'Escape') {
+      quickbar.classList.remove('open');
+      inspector.classList.remove('open');
+      shield.classList.remove('open');
+    }
+  });
+</script>
+</body>
+</html>
