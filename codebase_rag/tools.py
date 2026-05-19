@@ -23,6 +23,22 @@ SHELL_SAFE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "LOGNAM
 UNTRUSTED_BEGIN = "<<<UNTRUSTED-BEGIN>>>"
 UNTRUSTED_END = "<<<UNTRUSTED-END>>>"
 
+PYTHON_DOC_SOURCES = (
+    ("python", "Python standard library", "https://docs.python.org/3/", "Python source files"),
+    ("pyproject", "Python packaging", "https://packaging.python.org/", "pyproject.toml"),
+    ("pytest", "pytest", "https://docs.pytest.org/", "pytest dependency"),
+    ("fastapi", "FastAPI", "https://fastapi.tiangolo.com/", "FastAPI dependency"),
+    ("pydantic", "Pydantic", "https://docs.pydantic.dev/latest/", "Pydantic dependency"),
+    ("sqlalchemy", "SQLAlchemy", "https://docs.sqlalchemy.org/", "SQLAlchemy dependency"),
+    ("django", "Django", "https://docs.djangoproject.com/", "Django dependency"),
+    ("flask", "Flask", "https://flask.palletsprojects.com/", "Flask dependency"),
+    ("typer", "Typer", "https://typer.tiangolo.com/", "Typer dependency"),
+    ("click", "Click", "https://click.palletsprojects.com/", "Click dependency"),
+    ("httpx", "HTTPX", "https://www.python-httpx.org/", "HTTPX dependency"),
+    ("requests", "Requests", "https://requests.readthedocs.io/", "Requests dependency"),
+    ("textual", "Textual", "https://textual.textualize.io/", "Textual dependency"),
+)
+
 
 def wrap_untrusted(text: str) -> str:
     """Wrap externally-sourced text in markers so the model treats it as data, not instructions."""
@@ -78,6 +94,61 @@ def write_file(root: Path, path: str, content: str, on_change: Callable[[str], N
         "bytes_written": len(actual.encode("utf-8")),
         "lines": actual.count("\n") + 1,
     }
+
+
+def _nonoverlapping_spans(text: str, needle: str) -> list[tuple[int, int]]:
+    if not needle:
+        return []
+    spans = []
+    start = 0
+    while True:
+        idx = text.find(needle, start)
+        if idx == -1:
+            return spans
+        end = idx + len(needle)
+        spans.append((idx, end))
+        start = end
+
+
+def _spans_contained_in(spans: list[tuple[int, int]], containers: list[tuple[int, int]]) -> bool:
+    return bool(spans) and all(
+        any(
+            container_start <= start and end <= container_end
+            for container_start, container_end in containers
+        )
+        for start, end in spans
+    )
+
+
+def _planned_python_docs(planned: list[tuple[Path, str]], project_root: Path) -> list[dict]:
+    """Suggest official docs for a scaffolded Python project without fetching them."""
+    rel_to_content = {
+        str(path.relative_to(project_root.resolve())).replace("\\", "/"): content
+        for path, content in planned
+    }
+    lower_blob = "\n".join(f"{path}\n{content}" for path, content in rel_to_content.items()).lower()
+    paths = tuple(rel_to_content)
+    is_python = any(
+        path.endswith(".py")
+        or path in {"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"}
+        for path in paths
+    )
+    if not is_python:
+        return []
+
+    suggestions = []
+    seen_urls: set[str] = set()
+    for key, name, url, reason in PYTHON_DOC_SOURCES:
+        if key == "python":
+            matched = True
+        elif key == "pyproject":
+            matched = "pyproject.toml" in rel_to_content
+        else:
+            matched = re.search(rf"(^|[^a-z0-9_.-]){re.escape(key)}([^a-z0-9_.-]|$)", lower_blob)
+        if matched and url not in seen_urls:
+            suggestions.append({"name": name, "url": url, "reason": reason})
+            seen_urls.add(url)
+    return suggestions
 
 
 def create_project(
@@ -171,7 +242,7 @@ def create_project(
         written.append(rel)
 
     project_rel = str(project_root.relative_to(root_resolved))
-    return {
+    result = {
         "ok": True,
         "project_path": project_rel,
         "files_written": written,
@@ -181,6 +252,15 @@ def create_project(
             f"codebase-rag chat --root {project_root}",
         ],
     }
+    suggested_docs = _planned_python_docs(planned, project_root)
+    if suggested_docs:
+        result["suggested_documentation"] = suggested_docs
+        result["documentation_note"] = (
+            "No documentation was fetched automatically. Ask the user before any network "
+            "fetch, then use --allow-web with narrow --web-allow hosts or add local docs "
+            "with add-reference."
+        )
+    return result
 
 
 def _clean_pattern(pattern: str) -> str:
@@ -484,23 +564,45 @@ def edit_file(
     on_change: Callable[[str], None],
 ) -> dict:
     p = resolve_safe(root, path)
+    rel = str(p.relative_to(root.resolve()))
     if not p.exists():
         return {"ok": False, "error": f"{path} does not exist"}
+    if not old_string:
+        return {"ok": False, "error": "old_string must not be empty"}
     text = p.read_text(encoding="utf-8")
-    count = text.count(old_string)
-    if count == 0:
+    old_spans = _nonoverlapping_spans(text, old_string)
+    new_spans = _nonoverlapping_spans(text, new_string) if new_string else []
+    if not old_spans:
+        if len(new_spans) == 1:
+            return {
+                "ok": True,
+                "path": rel,
+                "unchanged": True,
+                "already_applied": True,
+                "message": "old_string not found, but new_string is already present",
+            }
         return {
             "ok": False,
             "error": "old_string not found; read the file and copy the exact text including whitespace",
         }
-    if count > 1:
+    if new_spans and _spans_contained_in(old_spans, new_spans):
+        return {
+            "ok": True,
+            "path": rel,
+            "unchanged": True,
+            "already_applied": True,
+            "message": "replacement already applied; skipped duplicate edit",
+        }
+    if len(old_spans) > 1:
         return {
             "ok": False,
-            "error": f"old_string appears {count} times; provide more surrounding context to make it unique",
+            "error": (
+                f"old_string appears {len(old_spans)} times; "
+                "provide more surrounding context to make it unique"
+            ),
         }
     new_text = text.replace(old_string, new_string, 1)
     p.write_text(new_text, encoding="utf-8")
-    rel = str(p.relative_to(root.resolve()))
     on_change(rel)
     return {
         "ok": True,
@@ -560,7 +662,9 @@ _SCHEMA_CREATE_PROJECT = {
             "starter files into it. Use this when the user asks to start or scaffold a "
             "new project. The project_path must be relative to the current session root; "
             "this tool cannot switch the active chat root, but it returns next commands "
-            "for indexing and chatting with the new project."
+            "for indexing and chatting with the new project. For Python projects it may "
+            "also return suggested official documentation; do not fetch those docs unless "
+            "the user approves an opt-in web step."
         ),
         "parameters": {
             "type": "object",
@@ -687,7 +791,11 @@ _SCHEMA_EDIT_FILE = {
     "type": "function",
     "function": {
         "name": "edit_file",
-        "description": "Replace exactly one occurrence of old_string with new_string in a file. Use read_file first to copy the exact text.",
+        "description": (
+            "Replace exactly one occurrence of old_string with new_string in a file. "
+            "Use read_file first to copy the exact text. If the replacement is already "
+            "present, the tool returns a successful no-op instead of applying a duplicate edit."
+        ),
         "parameters": {
             "type": "object",
             "properties": {

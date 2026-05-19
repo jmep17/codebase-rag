@@ -347,6 +347,26 @@ def _serialize_event(
             "summary": summary,
             "elapsed": elapsed,
         }
+    if kind == "check_start":
+        _, command, changed_files, failure_count = event
+        return {
+            "type": "check_start",
+            "turn": turn_id,
+            "command": command,
+            "changed_files": changed_files,
+            "failure": failure_count,
+        }
+    if kind == "check_result":
+        _, command, result, elapsed, failure_count, will_repair = event
+        return {
+            "type": "check_result",
+            "turn": turn_id,
+            "command": command,
+            "result": result,
+            "elapsed": elapsed,
+            "failure": failure_count,
+            "will_repair": will_repair,
+        }
     if kind == "max_turns":
         return {"type": "max_turns", "turn": turn_id, "max_turns": event[1]}
     if kind == "turn_done":
@@ -375,7 +395,7 @@ def create_app(
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.middleware.cors import CORSMiddleware
-    from starlette.responses import JSONResponse, StreamingResponse
+    from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
     from starlette.routing import Mount, Route, WebSocketRoute
     from starlette.staticfiles import StaticFiles
     from starlette.websockets import WebSocketDisconnect
@@ -398,6 +418,21 @@ def create_app(
                 # Static SPA bundle is anon; the SPA reads ?token= and uses it
                 # for /api/* calls.
                 return await call_next(request)
+            if static_dir is None and path == "/":
+                token_q = request.query_params.get("token", "").encode("utf-8")
+                if token_q and secrets.compare_digest(token_q, expected_token):
+                    return await call_next(request)
+                return JSONResponse(
+                    {
+                        "error": "missing bearer token",
+                        "hint": (
+                            "Open the exact URL printed by `codebase-rag serve`, "
+                            "including ?token=..., or call /api/* with an "
+                            "Authorization: Bearer <token> header."
+                        ),
+                    },
+                    status_code=401,
+                )
             auth = request.headers.get("authorization", "")
             if not auth.lower().startswith("bearer "):
                 return JSONResponse({"error": "missing bearer token"}, status_code=401)
@@ -417,6 +452,28 @@ def create_app(
                 "pid": os.getpid(),
                 "started_at": _STARTED_AT_ISO,
             }
+        )
+
+    async def no_static_landing(request):
+        return HTMLResponse(
+            """<!doctype html>
+<meta charset="utf-8">
+<title>codebase-rag serve</title>
+<style>
+body{margin:40px;font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#0f1217;color:#dce7df}
+main{max-width:760px}
+code{background:#1a211d;border:1px solid #304238;border-radius:4px;padding:2px 5px;color:#9be7b0}
+a{color:#9be7b0}
+</style>
+<main>
+<h1>codebase-rag backend is running</h1>
+<p>No browser UI bundle is configured for this server. Start with <code>--static DIR</code>
+to serve a built SPA at this URL.</p>
+<p>The REST and WebSocket API are available under <code>/api/*</code>. API requests must send
+<code>Authorization: Bearer &lt;token&gt;</code>.</p>
+<p><a href="/api/health">Health check</a> is public.</p>
+</main>""",
+            status_code=200,
         )
 
     async def list_projects(request):
@@ -736,6 +793,8 @@ def create_app(
                     "shell_runner": session.shell_runner,
                     "shell_network": session.shell_network,
                     "shell_timeout": session.shell_timeout,
+                    "check_command": session.check_command,
+                    "repair_attempts": session.repair_attempts,
                 },
                 "slash_specs": [
                     {
@@ -1015,6 +1074,8 @@ def create_app(
         routes.append(
             Mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa"),
         )
+    else:
+        routes.insert(0, Route("/", no_static_landing, methods=["GET"]))
 
     app = Starlette(
         debug=False,
@@ -1076,7 +1137,13 @@ def _print_banner(
         "  ⚠ Anyone with the token can read this codebase. Rotate by restarting (or --reuse-token)."
     )
     print()
-    print(f"  open: {binding}/?token={token}")
+    if static_dir is None:
+        print("  browser: no static bundle configured; pass --static DIR to serve the app")
+        print(f"  status:  {binding}/api/health")
+        print(f"  api:     use Authorization: Bearer <token> from {token_path}")
+        print(f"  help:    {binding}/?token={token}")
+    else:
+        print(f"  open: {binding}/?token={token}")
     if provider == "anthropic":
         print()
         print("  ⚠ Provider: anthropic — chat content WILL leave your machine (api.anthropic.com).")

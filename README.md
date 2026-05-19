@@ -328,6 +328,8 @@ When `codebase-rag serve` is running, an IDE extension can also `PUT` the same J
 ### Serve
 
 `serve` starts the local HTTP/WebSocket backend. It requires `pip install -e '.[serve]'`.
+If the editable install already exists and your package index blocks build dependencies, install the runtime pieces directly instead: `pip install starlette uvicorn websockets`.
+Without `--static DIR`, `serve` runs the API only; use `--static web/dist` or another built SPA directory for the browser app.
 
 | Flag | What it does | Example |
 |---|---|---|
@@ -571,7 +573,7 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | `read_file`  | `path`                            | Returns full file content (wrapped in untrusted markers). Refuses files over 200KB. | always |
 | `grep`       | `pattern`, `file_glob?`, `literal?` | Regex-search every source file. Caps at 300 matches. **Use this for "list every / find all" queries.** | always |
 | `get_diagnostics` | `path?`, `severity?`, `source?`, `limit?` | Read cached IDE/LSP Problems diagnostics from the per-project metadata dir. Messages are wrapped in untrusted markers. | always |
-| `create_project` | `project_path`, `description?`, `files?`, `overwrite?` | Prompts by default, then creates a new directory under `--root` with starter files. Returns commands to index and chat with it as its own project. | not `--read-only` |
+| `create_project` | `project_path`, `description?`, `files?`, `overwrite?` | Prompts by default, then creates a new directory under `--root` with starter files. Returns commands to index and chat with it as its own project; Python scaffolds also return official docs suggestions without fetching them. | not `--read-only` |
 | `write_file` | `path`, `content`                 | Prompts by default, then overwrites the file. Reads it back and reports bytes/lines written. | not `--read-only` |
 | `edit_file`  | `path`, `old_string`, `new_string`| Prompts by default, then replaces exactly one occurrence; errors on missing or ambiguous match. | not `--read-only` |
 | `run_shell`  | `command`                         | Execute a command. Confirmation prompt fires before each run. shlex.split parsing, no shell expansion. Optional Docker runner. | `--allow-shell` |
@@ -579,6 +581,8 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | `web_fetch`  | `url`                             | Fetch a URL, extract main text via trafilatura, cache 24h.              | `--allow-web` |
 
 All file paths resolve under `--root`. Anything outside is rejected.
+
+When `create_project` detects a Python project, the tool result includes a small `suggested_documentation` list such as Python, packaging, pytest, FastAPI, or Pydantic docs based on the files and dependencies it just wrote. It does not contact the network. If you want the assistant to read those pages in the current session, restart chat with `--allow-web` and narrow `--web-allow` entries such as `docs.python.org` or `fastapi.tiangolo.com`, then approve the specific fetch.
 
 The system prompt instructs the agent to call `grep` for any enumeration question (e.g. "list every API call this app makes") rather than relying on the retrieved Context block, which is semantic top-K and will silently miss matches.
 

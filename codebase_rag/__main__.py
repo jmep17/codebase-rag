@@ -40,9 +40,11 @@ def _print_missing_extra(
     error: ImportError,
 ) -> None:
     missing = f" ({error.name})" if getattr(error, "name", None) else ""
+    direct_install = " ".join(modules)
     print(
         f"error: {feature} needs optional dependencies that are not installed{missing}.\n"
         f"  Install: .venv/bin/python -m pip install -e '.[{extra}]'\n"
+        f"  Or, if the editable install already exists: .venv/bin/python -m pip install {direct_install}\n"
         f"  Then:    {retry}\n"
         f"  Modules: {', '.join(modules)}\n"
         f"  Note: keep the quotes around '.[{extra}]' in zsh.\n"
@@ -488,6 +490,27 @@ def main() -> None:
         ),
     )
     p_chat.add_argument(
+        "--check-command",
+        type=str,
+        default="",
+        metavar="CMD",
+        help=(
+            "After a model turn changes files, run this user-provided verification "
+            "command and feed failures back to the model. Parsed like --allow-shell "
+            "commands: no shell expansion unless CMD explicitly invokes sh -c."
+        ),
+    )
+    p_chat.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Number of model repair passes after --check-command fails "
+            "(default: 0, report the failure without repair)."
+        ),
+    )
+    p_chat.add_argument(
         "--confirm-writes",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -660,6 +683,20 @@ def main() -> None:
     )
     p_serve.add_argument("--shell-timeout", type=float, default=30.0)
     p_serve.add_argument(
+        "--check-command",
+        type=str,
+        default="",
+        metavar="CMD",
+        help="Run this verification command after WS model edits and report failures.",
+    )
+    p_serve.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Number of model repair passes after --check-command fails.",
+    )
+    p_serve.add_argument(
         "--confirm-writes",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -803,6 +840,8 @@ def main() -> None:
                 shell_timeout=args.shell_timeout,
                 shell_runner=args.shell_runner,
                 shell_network=args.shell_network,
+                check_command=args.check_command,
+                repair_attempts=max(0, args.repair_attempts),
                 confirm_writes=args.confirm_writes,
                 allow_web=args.allow_web,
                 web_allow=tuple(args.web_allow),
@@ -823,6 +862,8 @@ def main() -> None:
             shell_timeout=args.shell_timeout,
             shell_runner=args.shell_runner,
             shell_network=args.shell_network,
+            check_command=args.check_command,
+            repair_attempts=max(0, args.repair_attempts),
             confirm_writes=args.confirm_writes,
             allow_web=args.allow_web,
             web_allow=tuple(args.web_allow),
@@ -903,6 +944,8 @@ def main() -> None:
                 shell_runner=args.shell_runner,
                 shell_network=args.shell_network,
                 shell_timeout=args.shell_timeout,
+                check_command=args.check_command,
+                repair_attempts=max(0, args.repair_attempts),
                 confirm_writes=args.confirm_writes,
                 allow_web=args.allow_web,
                 web_allow=tuple(args.web_allow),

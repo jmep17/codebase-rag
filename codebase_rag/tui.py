@@ -1464,6 +1464,23 @@ class CodebaseRagApp(App):
                     turn.update_tool_card_declined(key, tname, args),
                     exclusive=False,
                 )
+        elif kind == "check_start":
+            _, command, changed_files, failure_count = event
+            note = ", ".join(changed_files[:3])
+            if len(changed_files) > 3:
+                note += f", +{len(changed_files) - 3} more"
+            self.run_worker(
+                turn.add_marker(f"[#fbbf24][check #{failure_count}: {command} ({note})][/]"),
+                exclusive=False,
+            )
+        elif kind == "check_result":
+            _, _command, result, elapsed, _failure_count, will_repair = event
+            status = "ok" if result.get("ok") else f"failed ({result.get('exit_code', '?')})"
+            repair = " · repair queued" if will_repair else ""
+            self.run_worker(
+                turn.add_marker(f"[#fbbf24][check {status} in {elapsed:.2f}s{repair}][/]"),
+                exclusive=False,
+            )
         elif kind == "architect_start":
             self.run_worker(
                 turn.add_marker(f"[#c084fc][architect ({event[1]}) thinking…][/]"),
@@ -1533,6 +1550,8 @@ def run_tui(
     shell_timeout: float = 30,
     shell_runner: str = "host",
     shell_network: str = "none",
+    check_command: str = "",
+    repair_attempts: int = 0,
     confirm_writes: bool = True,
     allow_web: bool = False,
     web_allow: tuple[str, ...] = (),
@@ -1553,6 +1572,8 @@ def run_tui(
         shell_timeout=shell_timeout,
         shell_runner=shell_runner,
         shell_network=shell_network,
+        check_command=check_command,
+        repair_attempts=repair_attempts,
         confirm_writes=confirm_writes,
         allow_web=allow_web,
         web_allow=web_allow,
