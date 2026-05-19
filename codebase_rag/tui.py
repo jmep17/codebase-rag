@@ -43,11 +43,8 @@ from . import audit as audit_mod
 from . import chat as chat_mod
 from . import gitops
 
-HINT_TEXT = (
-    "^R retrieval inspector   ^L audit overlay   ^K command palette   "
-    "/ slash menu   j/k select turns when composer is unfocused   ? help"
-)
-COMPOSER_PLACEHOLDER = "type a message — Enter to send · :q to quit"
+HINT_TEXT = "^K commands   / slash menu   ^R retrieval   ^L audit   ^P projects   ? help"
+COMPOSER_PLACEHOLDER = "Ask about this codebase or type / for commands"
 
 
 def _clip(text: str, limit: int) -> str:
@@ -369,7 +366,7 @@ class PaletteModal(ModalScreen):
             row = Horizontal(classes=f"pItem{' sel' if i == self._sel else ''}")
             list_node.mount(row)
             row.mount(Static(it.name, classes="pName"))
-            row.mount(Static(it.desc, classes="pDesc"))
+            row.mount(Static(_clip(it.desc, 72), classes="pDesc"))
             if it.requires:
                 row.mount(Static(it.requires, classes="pReq"))
             else:
@@ -770,7 +767,7 @@ class ShieldBar(Horizontal):
 
     def compose(self) -> ComposeResult:
         yield Static("", id="shield-left")
-        yield Static("^K command   ^P projects   ? help", id="shield-right")
+        yield Static("^K commands  ^P projects  ? help", id="shield-right")
 
     def on_mount(self) -> None:
         self._paint()
@@ -799,10 +796,10 @@ class ShieldBar(Horizontal):
         except Exception:
             chunk_count = 0
         left = (
-            f"[{dot_color}]●[/] {posture}"
-            f" [#3d5e4d]│[/] [bold]{s.chat_model}[/] · {s.provider_name}"
-            f" [#3d5e4d]│[/] [#5b8b73]{' · '.join(flags)}[/]"
-            f" [#3d5e4d]│[/] {chunk_count} chunks"
+            f"[{dot_color}]●[/] {posture} "
+            f"[#3d5e4d]·[/] [bold]{s.chat_model}[/]/{s.provider_name} "
+            f"[#3d5e4d]·[/] [#5b8b73]{' · '.join(flags)}[/] "
+            f"[#3d5e4d]·[/] {chunk_count} chunks"
         )
         try:
             self.query_one("#shield-left", Static).update(left)
@@ -826,11 +823,11 @@ class ProjectsPane(VerticalScroll):
         name = self.session.root.name or str(self.session.root)
         meta = f"{chunk_count} chunks · {self.session.notes_marker}"
         yield Static(
-            f"[bold]{name}[/]\n[#5b8b73]{meta}[/]\n[#3d5e4d]{self.session.root}[/]",
+            f"[bold]{_clip(name, 22)}[/]\n[#5b8b73]{meta}[/]\n[#3d5e4d]{_clip(str(self.session.root), 30)}[/]",
             classes="proj active",
         )
         yield Static("SESSION", classes="secH")
-        yield Static("▸ live · " + self.session.session, classes="session cur")
+        yield Static("live · " + self.session.session[:8], classes="session cur")
         yield Static(
             f"provider  {self.session.provider_name}\nmodel     {_clip(self.session.chat_model, 18)}",
             classes="side-kv",
@@ -882,8 +879,10 @@ class ContextPane(VerticalScroll):
                 f"[#4ade80]●[/] repo  [#5b8b73]· {len(dirty_lines)} dirty[/]",
                 classes="gitline",
             )
-            for ln in dirty_lines[:8]:
-                yield Static(f"    {ln}", classes="gitline gitfile")
+            for ln in dirty_lines[:6]:
+                yield Static(f"  {_clip(ln, 30)}", classes="gitline gitfile")
+            if len(dirty_lines) > 6:
+                yield Static(f"  +{len(dirty_lines) - 6} more", classes="gitline gitfile")
         else:
             yield Static("[#5b8b73](not a git repo)[/]", classes="gitline")
 
@@ -904,7 +903,7 @@ class Composer(Vertical):
     def compose(self) -> ComposeResult:
         with Horizontal(classes="pinned-row"):
             for rel in self.session.pinned_paths[:6]:
-                yield Static(f"📎 {rel}", classes="chip")
+                yield Static(f"+ {rel}", classes="chip")
         with Horizontal(classes="composer-row"):
             yield Static(">", classes="gt")
             yield Input(placeholder=COMPOSER_PLACEHOLDER, id="composer-input")
@@ -1224,7 +1223,7 @@ class CodebaseRagApp(App):
     def action_open_command_palette(self) -> None:
         items: list[PaletteItem] = [
             PaletteItem(
-                ":switch-project", "switch to a different indexed project", requires="not impl"
+                ":switch-project", "switch to a different indexed project", requires="planned"
             ),
             PaletteItem(
                 ":toggle-read-only",
