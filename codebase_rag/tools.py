@@ -18,6 +18,7 @@ MAX_READ_BYTES = 200_000
 GREP_MAX_RESULTS = 300
 GREP_MAX_FILE_BYTES = 1_000_000
 SHELL_OUTPUT_CAP = 50_000
+DEFAULT_SHELL_RUNNER = "docker:python:3.13-slim"
 SHELL_SAFE_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME", "TMPDIR")
 
 UNTRUSTED_BEGIN = "<<<UNTRUSTED-BEGIN>>>"
@@ -398,7 +399,7 @@ def _cap_output(text: str) -> tuple[str, bool]:
 def _run_subprocess(
     argv: list[str], *, cwd: str | None, env: dict | None, timeout: float, command: str, runner: str
 ) -> dict:
-    """Shared subprocess runner used by both host and Docker shell modes."""
+    """Shared subprocess runner used by Docker shell mode."""
     t0 = time.time()
     try:
         proc = subprocess.run(
@@ -463,9 +464,14 @@ def _docker_argv(root: Path, image: str, network: str, inner_argv: list[str]) ->
         "1g",
         "--cpus",
         "1",
+        "--pids-limit",
+        "128",
         "--read-only",
         "--tmpfs",
         "/tmp:size=64m",
+        "--cap-drop=ALL",
+        "--security-opt",
+        "no-new-privileges",
         "-e",
         "HOME=/tmp",
         "-e",
@@ -480,7 +486,7 @@ def run_shell(
     command: str,
     *,
     timeout: float = 30,
-    runner: str = "host",
+    runner: str = DEFAULT_SHELL_RUNNER,
     shell_network: str = "none",
 ) -> dict:
     """Execute `command` in `root` with no shell expansion and a scrubbed env.
@@ -491,10 +497,10 @@ def run_shell(
     need shell features can still call `sh -c "..."` explicitly — that's a
     binary invocation, not metacharacter expansion.)
 
-    `runner` is either "host" or "docker:<image>". With docker, the resolved
-    argv is run inside a transient container with the project root bind-mounted
-    as /work, no host filesystem visible, a scrubbed minimal env, and the
-    network policy from `shell_network` (default "none" — fully offline).
+    `runner` must be "docker:<image>". The resolved argv is run inside a
+    transient container with the project root bind-mounted as /work, no host
+    filesystem visible, a scrubbed minimal env, and the network policy from
+    `shell_network` (default "none" — fully offline).
     """
     try:
         argv = shlex.split(command)
@@ -509,14 +515,15 @@ def run_shell(
         return {"ok": False, "error": "empty command", "command": command, "runner": runner}
 
     if runner == "host":
-        return _run_subprocess(
-            argv,
-            cwd=str(root.resolve()),
-            env=_scrubbed_env(),
-            timeout=timeout,
-            command=command,
-            runner="host",
-        )
+        return {
+            "ok": False,
+            "error": (
+                "host shell runner is disabled; use --shell-runner docker:IMAGE "
+                "so commands run in the project sandbox"
+            ),
+            "command": command,
+            "runner": runner,
+        }
 
     if runner.startswith("docker:"):
         image = runner[len("docker:") :].strip()
@@ -535,14 +542,13 @@ def run_shell(
                 "runner": runner,
             }
         docker_argv = _docker_argv(root, image, shell_network, argv)
-        # Host env is irrelevant — container has its own minimal env via the
-        # -e flags above. We pass env=None so subprocess inherits this
-        # process's env *for finding docker on PATH*, but the container itself
-        # only sees what we explicitly set with -e.
+        # Container env is controlled by the -e flags above. The Docker client
+        # process also gets a scrubbed env so host secrets do not leak into
+        # helper process environments.
         return _run_subprocess(
             docker_argv,
             cwd=None,
-            env=None,
+            env=_scrubbed_env(),
             timeout=timeout,
             command=command,
             runner=runner,
@@ -550,7 +556,7 @@ def run_shell(
 
     return {
         "ok": False,
-        "error": f"unknown runner {runner!r}; use 'host' or 'docker:<image>'",
+        "error": f"unknown runner {runner!r}; use 'docker:<image>'",
         "command": command,
         "runner": runner,
     }
@@ -867,7 +873,7 @@ _SCHEMA_RUN_SHELL = {
             "Output (stdout and stderr merged) is captured and returned, capped at 50KB. "
             "Commands are parsed with shlex.split; shell features (pipes, $VAR "
             "expansion, &&, ||, backticks, redirection) are NOT supported — for "
-            "multi-step flows, issue multiple calls."
+            "multi-step flows, issue multiple calls. Commands run in a Docker sandbox."
         ),
         "parameters": {
             "type": "object",
@@ -921,7 +927,7 @@ def run_tool(
     on_change: Callable[[str], None],
     *,
     shell_timeout: float = 30,
-    shell_runner: str = "host",
+    shell_runner: str = DEFAULT_SHELL_RUNNER,
     shell_network: str = "none",
     web_config: dict | None = None,
 ) -> str:

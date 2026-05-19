@@ -8,7 +8,7 @@ starlette/uvicorn so the default install pays nothing for the [serve] extra.
 Bind defaults to 127.0.0.1:8723. Every request requires `Authorization: Bearer
 <token>` (the WS also accepts `?token=` because browsers can't set headers on
 `new WebSocket()`). The token is a 256-bit random string written to the per-project
-meta dir (`~/.codebase-rag/meta/<sha>/serve.token`, mode 0600) on every start.
+meta dir (`$CODEBASE_RAG_HOME/meta/<sha>/serve.token`, mode 0600) on every start.
 """
 
 from __future__ import annotations

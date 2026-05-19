@@ -17,8 +17,10 @@ from . import diagnostics as diagnostics_mod
 from . import index as index_mod
 from . import training as training_mod
 from . import url_ingest as url_ingest_mod
+from .config import data_home, default_db_path
+from .tools import DEFAULT_SHELL_RUNNER
 
-DEFAULT_DB = Path.home() / ".codebase-rag" / "db"
+DEFAULT_DB = default_db_path()
 
 
 def _print_missing_command(parser: argparse.ArgumentParser) -> None:
@@ -292,7 +294,8 @@ def main() -> None:
         default=None,
         help=(
             "Directory for generated artifacts (default: "
-            "~/.codebase-rag/meta/<project-hash>/assistant_training)."
+            "$CODEBASE_RAG_HOME/meta/<project-hash>/assistant_training, "
+            "or ~/.codebase-rag/meta/<project-hash>/assistant_training)."
         ),
     )
     p_train.add_argument(
@@ -533,14 +536,13 @@ def main() -> None:
     p_chat.add_argument(
         "--shell-runner",
         type=str,
-        default="host",
-        metavar="host|docker:IMAGE",
+        default=DEFAULT_SHELL_RUNNER,
+        metavar="docker:IMAGE",
         help=(
-            "Where to execute run_shell / :run commands. 'host' (default) runs "
-            "directly on the host with scrubbed env. 'docker:<image>' runs each "
+            "Where to execute run_shell / :run commands. 'docker:<image>' runs each "
             "command inside a transient container with the project root mounted "
-            "at /work, no host filesystem visible, and a minimal env. Example: "
-            "--shell-runner docker:python:3.13-slim."
+            "at /work, no host filesystem visible, and a minimal env. "
+            f"Default: {DEFAULT_SHELL_RUNNER}."
         ),
     )
     p_chat.add_argument(
@@ -551,7 +553,7 @@ def main() -> None:
         help=(
             "Docker network policy when --shell-runner=docker:... is set. "
             "'none' (default) = no network; 'bridge' = standard docker bridge; "
-            "'host' = host networking (least isolation). Ignored when runner is host."
+            "'host' = host networking (least isolation)."
         ),
     )
     p_chat.add_argument(
@@ -623,7 +625,8 @@ def main() -> None:
         metavar="HOST_GLOB",
         help=(
             "Host glob to allow for web_fetch (repeatable). e.g. 'docs.python.org', "
-            "'*.readthedocs.io'. If unset, any host is allowed (subject to --web-block)."
+            "'*.readthedocs.io'. At least one allow entry is required before web_fetch "
+            "will request a URL."
         ),
     )
     p_chat.add_argument(
@@ -757,8 +760,8 @@ def main() -> None:
     p_serve.add_argument(
         "--shell-runner",
         type=str,
-        default="host",
-        metavar="host|docker:IMAGE",
+        default=DEFAULT_SHELL_RUNNER,
+        metavar="docker:IMAGE",
     )
     p_serve.add_argument(
         "--shell-network",
@@ -1137,6 +1140,7 @@ def _handle_doctor(args: argparse.Namespace) -> None:
 
     print("codebase-rag doctor")
     print(f"Project: {root}")
+    print(f"State: {data_home()}")
     print(f"Database: {args.db}")
     print()
 

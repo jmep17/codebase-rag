@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import ipaddress
 import json
+import socket
 import time
 import urllib.parse
 from collections.abc import Sequence
 from pathlib import Path
 
 MAX_FETCH_CHARS = 50_000
+MAX_FETCH_BYTES = 1_000_000
 FETCH_TIMEOUT = 10.0
 SEARCH_TIMEOUT = 10.0
 CACHE_TTL_SECONDS = 24 * 3600
+MAX_REDIRECTS = 3
 
 
 class WebToolsUnavailable(RuntimeError):
@@ -44,9 +48,93 @@ def _require_deps() -> tuple:
 
 def _host_of(url: str) -> str:
     try:
-        return (urllib.parse.urlparse(url).netloc or "").lower()
+        return (urllib.parse.urlparse(url).hostname or "").lower()
     except Exception:
         return ""
+
+
+def _parsed_url(url: str) -> urllib.parse.ParseResult:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("URL scheme must be http or https")
+    if not parsed.hostname:
+        raise ValueError("URL must include a host")
+    if parsed.username or parsed.password:
+        raise ValueError("URL credentials are not allowed")
+    # Accessing .port raises ValueError for malformed ports; force that here.
+    _ = parsed.port
+    return parsed
+
+
+def _default_port(parsed: urllib.parse.ParseResult) -> int:
+    return parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
+def _blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return any(
+        (
+            ip.is_private,
+            ip.is_loopback,
+            ip.is_link_local,
+            ip.is_multicast,
+            ip.is_unspecified,
+            ip.is_reserved,
+        )
+    )
+
+
+def _validate_url_policy(
+    url: str,
+    *,
+    allow_patterns: Sequence[str],
+    block_patterns: Sequence[str],
+) -> tuple[bool, str]:
+    if not allow_patterns:
+        return False, "at least one --web-allow host glob is required"
+    try:
+        parsed = _parsed_url(url)
+    except ValueError as e:
+        return False, str(e)
+    host = (parsed.hostname or "").lower()
+    ok, reason = _host_allowed(host, allow_patterns, block_patterns)
+    if not ok:
+        return False, reason
+    try:
+        infos = socket.getaddrinfo(host, _default_port(parsed), type=socket.SOCK_STREAM)
+    except OSError as e:
+        return False, f"could not resolve host {host}: {e}"
+    seen: set[str] = set()
+    for info in infos:
+        ip_s = info[4][0]
+        if ip_s in seen:
+            continue
+        seen.add(ip_s)
+        try:
+            ip = ipaddress.ip_address(ip_s)
+        except ValueError:
+            return False, f"could not parse resolved address {ip_s!r}"
+        if _blocked_ip(ip):
+            return False, f"host {host} resolves to blocked private/reserved address {ip}"
+    if not seen:
+        return False, f"host {host} did not resolve to any addresses"
+    return True, ""
+
+
+def _read_response_capped(resp) -> tuple[str, bool, int]:
+    chunks: list[bytes] = []
+    total = 0
+    truncated = False
+    for chunk in resp.iter_bytes():
+        total += len(chunk)
+        if total > MAX_FETCH_BYTES:
+            remaining = MAX_FETCH_BYTES - sum(len(c) for c in chunks)
+            if remaining > 0:
+                chunks.append(chunk[:remaining])
+            truncated = True
+            break
+        chunks.append(chunk)
+    encoding = resp.encoding or "utf-8"
+    return b"".join(chunks).decode(encoding, errors="replace"), truncated, total
 
 
 def _host_allowed(
@@ -94,7 +182,7 @@ def web_search(
 
     endpoint = searxng_url.rstrip("/") + "/search"
     try:
-        with httpx.Client(timeout=SEARCH_TIMEOUT) as client:
+        with httpx.Client(timeout=SEARCH_TIMEOUT, trust_env=False) as client:
             resp = client.get(
                 endpoint,
                 params={"q": query, "format": "json", "safesearch": "1"},
@@ -143,10 +231,13 @@ def web_fetch(
     """HTTP GET `url`, extract main content via trafilatura, cap at MAX_FETCH_CHARS."""
     if not url:
         return {"ok": False, "error": "empty url"}
-    host = _host_of(url)
-    ok, reason = _host_allowed(host, allow_patterns, block_patterns)
+    ok, reason = _validate_url_policy(
+        url,
+        allow_patterns=allow_patterns,
+        block_patterns=block_patterns,
+    )
     if not ok:
-        return {"ok": False, "error": reason, "url": url, "host": host}
+        return {"ok": False, "error": reason, "url": url, "host": _host_of(url)}
     try:
         _require_deps()
     except WebToolsUnavailable as e:
@@ -162,9 +253,22 @@ def web_fetch(
         try:
             cached = json.loads(cpath.read_text(encoding="utf-8"))
             if time.time() - cached.get("ts", 0) < CACHE_TTL_SECONDS:
+                cached_url = cached.get("url", url)
+                ok, reason = _validate_url_policy(
+                    cached_url,
+                    allow_patterns=allow_patterns,
+                    block_patterns=block_patterns,
+                )
+                if not ok:
+                    return {
+                        "ok": False,
+                        "error": f"cached URL no longer allowed: {reason}",
+                        "url": url,
+                        "final_url": cached_url,
+                    }
                 return {
                     "ok": True,
-                    "url": cached.get("url", url),
+                    "url": cached_url,
                     "title": cached.get("title", ""),
                     "content": wrap_untrusted(cached.get("content", "")),
                     "status": cached.get("status", 200),
@@ -174,39 +278,75 @@ def web_fetch(
         except (OSError, json.JSONDecodeError):
             pass
 
-    # Fetch
+    # Fetch. Redirects are followed manually so every hop is checked before
+    # the request is sent; this prevents allowed hosts from redirecting the
+    # agent to loopback, link-local, or other internal addresses.
+    current = url
+    redirects = 0
+    status_code = 0
+    final_url = current
+    html = ""
+    response_truncated = False
+    response_bytes = 0
     try:
-        with httpx.Client(follow_redirects=True, timeout=FETCH_TIMEOUT, max_redirects=3) as client:
-            resp = client.get(url)
+        with httpx.Client(follow_redirects=False, timeout=FETCH_TIMEOUT, trust_env=False) as client:
+            while True:
+                ok, reason = _validate_url_policy(
+                    current,
+                    allow_patterns=allow_patterns,
+                    block_patterns=block_patterns,
+                )
+                if not ok:
+                    return {"ok": False, "error": reason, "url": url, "final_url": current}
+                with client.stream("GET", current) as resp:
+                    status_code = resp.status_code
+                    final_url = str(resp.url)
+                    if resp.status_code in {301, 302, 303, 307, 308}:
+                        redirects += 1
+                        if redirects > MAX_REDIRECTS:
+                            return {
+                                "ok": False,
+                                "error": f"too many redirects (>{MAX_REDIRECTS})",
+                                "url": url,
+                                "final_url": current,
+                            }
+                        location = resp.headers.get("location")
+                        if not location:
+                            return {
+                                "ok": False,
+                                "error": f"HTTP {resp.status_code} redirect without Location",
+                                "url": url,
+                                "final_url": current,
+                            }
+                        current = urllib.parse.urljoin(current, location)
+                        continue
+                    html, response_truncated, response_bytes = _read_response_capped(resp)
+                    break
     except httpx.HTTPError as e:
         return {"ok": False, "error": f"fetch failed: {e}", "url": url}
-    if resp.status_code >= 400:
-        return {"ok": False, "error": f"HTTP {resp.status_code}", "url": url}
+    if status_code >= 400:
+        return {"ok": False, "error": f"HTTP {status_code}", "url": url, "final_url": final_url}
 
-    # Re-check the final host after redirects
-    final_host = _host_of(str(resp.url))
-    if final_host != host:
-        ok, reason = _host_allowed(final_host, allow_patterns, block_patterns)
-        if not ok:
-            return {
-                "ok": False,
-                "error": f"redirect to disallowed host: {reason}",
-                "url": url,
-                "final_url": str(resp.url),
-            }
+    ok, reason = _validate_url_policy(
+        final_url,
+        allow_patterns=allow_patterns,
+        block_patterns=block_patterns,
+    )
+    if not ok:
+        return {"ok": False, "error": reason, "url": url, "final_url": final_url}
 
     # Extract main content. trafilatura is forgiving with raw HTML.
     extracted = None
     try:
         extracted = trafilatura.extract(
-            resp.text,
+            html,
             include_links=False,
             include_comments=False,
             favor_recall=True,
         )
     except Exception:
         extracted = None
-    text = extracted if extracted else resp.text
+    text = extracted if extracted else html
     truncated = False
     if len(text) > MAX_FETCH_CHARS:
         text = text[:MAX_FETCH_CHARS] + f"\n... [{len(text) - MAX_FETCH_CHARS} chars truncated]"
@@ -214,7 +354,7 @@ def web_fetch(
 
     title = ""
     try:
-        meta = trafilatura.extract_metadata(resp.text)
+        meta = trafilatura.extract_metadata(html)
         if meta and meta.title:
             title = meta.title
     except Exception:
@@ -227,10 +367,10 @@ def web_fetch(
             cpath.write_text(
                 json.dumps(
                     {
-                        "url": str(resp.url),
+                        "url": final_url,
                         "title": title,
                         "content": text,
-                        "status": resp.status_code,
+                        "status": status_code,
                         "ts": time.time(),
                     }
                 ),
@@ -241,10 +381,13 @@ def web_fetch(
 
     return {
         "ok": True,
-        "url": str(resp.url),
+        "url": final_url,
         "title": title,
         "content": wrap_untrusted(text),
-        "status": resp.status_code,
+        "status": status_code,
         "cached": False,
         "truncated": truncated,
+        "response_bytes": response_bytes,
+        "response_truncated": response_truncated,
+        "redirects": redirects,
     }

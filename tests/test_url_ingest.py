@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import socket
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from codebase_rag import url_ingest
+from codebase_rag import tools, url_ingest, web
 
 
 def fake_getaddrinfo(ip: str):
@@ -48,6 +49,36 @@ class UrlPolicyTests(unittest.TestCase):
                 block_patterns=(),
             )
         self.assertTrue(ok, reason)
+
+
+class WebFetchPolicyTests(unittest.TestCase):
+    def test_web_fetch_policy_requires_allowlist(self):
+        ok, reason = web._validate_url_policy(
+            "https://docs.example.com/page",
+            allow_patterns=(),
+            block_patterns=(),
+        )
+        self.assertFalse(ok)
+        self.assertIn("--web-allow", reason)
+
+    def test_web_fetch_policy_rejects_private_resolved_ip(self):
+        with mock.patch("socket.getaddrinfo", return_value=fake_getaddrinfo("10.0.0.5")):
+            ok, reason = web._validate_url_policy(
+                "https://docs.example.com/page",
+                allow_patterns=("docs.example.com",),
+                block_patterns=(),
+            )
+        self.assertFalse(ok)
+        self.assertIn("blocked", reason)
+
+    def test_host_shell_runner_is_disabled(self):
+        result = tools.run_shell(
+            Path("."),
+            "python --version",
+            runner="host",
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("host shell runner is disabled", result["error"])
 
 
 class FakeResponse:

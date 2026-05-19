@@ -13,10 +13,11 @@ import chromadb
 import ollama
 from chromadb.config import Settings
 
+from .config import meta_root
+
 CHROMA_SETTINGS = Settings(anonymized_telemetry=False)
 
 EMBEDDING_MODEL = "nomic-embed-text"
-META_ROOT = Path.home() / ".codebase-rag" / "meta"
 
 
 def _root_digest(root: Path) -> str:
@@ -35,7 +36,7 @@ def collection_name_for(root: Path) -> str:
 
 def project_meta_dir(root: Path) -> Path:
     """Path to the per-project metadata directory (notes, etc.), outside any repo."""
-    return META_ROOT / _root_digest(root)
+    return meta_root() / _root_digest(root)
 
 
 def _open_collection(client, root: Path):

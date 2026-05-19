@@ -43,6 +43,7 @@ from textual.widgets import Input, Markdown, Static
 from . import audit as audit_mod
 from . import chat as chat_mod
 from . import gitops
+from .tools import DEFAULT_SHELL_RUNNER
 
 HINT_TEXT = "^K commands   / slash menu   ^R retrieval   ^L audit   ^P projects   ? help"
 COMPOSER_PLACEHOLDER = "Ask about this codebase or type / for commands"
@@ -1636,7 +1637,7 @@ def run_tui(
     read_only: bool = False,
     allow_shell: bool = False,
     shell_timeout: float = 30,
-    shell_runner: str = "host",
+    shell_runner: str = DEFAULT_SHELL_RUNNER,
     shell_network: str = "none",
     check_command: str = "",
     repair_attempts: int = 0,

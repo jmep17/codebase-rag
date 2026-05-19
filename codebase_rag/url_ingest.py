@@ -144,7 +144,11 @@ def fetch_url_markdown(
     status_code = 0
     final_url = current
     try:
-        with httpx.Client(timeout=FETCH_TIMEOUT, follow_redirects=False) as client:
+        with httpx.Client(
+            timeout=FETCH_TIMEOUT,
+            follow_redirects=False,
+            trust_env=False,
+        ) as client:
             while True:
                 ok, reason = _validate_url_policy(
                     current,

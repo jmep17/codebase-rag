@@ -27,6 +27,7 @@ from .index import (
     reindex_file,
 )
 from .tools import (
+    DEFAULT_SHELL_RUNNER,
     MAX_READ_BYTES,
     UNTRUSTED_BEGIN,
     UNTRUSTED_END,
@@ -621,7 +622,7 @@ def init_chat_session(
     read_only: bool = False,
     allow_shell: bool = False,
     shell_timeout: float = 30,
-    shell_runner: str = "host",
+    shell_runner: str = DEFAULT_SHELL_RUNNER,
     shell_network: str = "none",
     check_command: str = "",
     repair_attempts: int = 0,
@@ -1421,8 +1422,8 @@ def _print_banner(session: ChatSession) -> None:
     git_marker = "  [git: review-then-commit]" if gitops.is_git_repo(s.root) else ""
     shell_marker = ""
     if s.allow_shell and not s.read_only:
-        runner_desc = "host" if s.shell_runner == "host" else s.shell_runner
-        net_desc = "" if s.shell_runner == "host" else f", network={s.shell_network}"
+        runner_desc = s.shell_runner
+        net_desc = f", network={s.shell_network}"
         shell_marker = f"  [shell: enabled, runner={runner_desc}{net_desc}, user-confirmed]"
     confirm_marker = (
         "  [confirm-writes: every create/write/edit asks first]" if s.confirm_writes else ""
@@ -1915,7 +1916,7 @@ def agent_loop(
     read_only: bool = False,
     allow_shell: bool = False,
     shell_timeout: float = 30,
-    shell_runner: str = "host",
+    shell_runner: str = DEFAULT_SHELL_RUNNER,
     shell_network: str = "none",
     check_command: str = "",
     repair_attempts: int = 0,

@@ -13,7 +13,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
-DEFAULT_USER_SKILL_DIR = Path.home() / ".codebase-rag" / "skills"
+from ..config import default_user_skill_dir
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class SkillMatch:
 
 def load_skill_library(extra_dirs: tuple[Path, ...] = ()) -> list[Skill]:
     """Load bundled, user, and explicitly configured skills."""
-    roots = [Path(__file__).parent, DEFAULT_USER_SKILL_DIR, *extra_dirs]
+    roots = [Path(__file__).parent, default_user_skill_dir(), *extra_dirs]
     skills: dict[str, Skill] = {}
     for root in roots:
         for skill_dir in _candidate_skill_dirs(root):
@@ -307,7 +307,7 @@ def _reason(
 
 def _source_rank(path: Path) -> int:
     try:
-        path.relative_to(DEFAULT_USER_SKILL_DIR)
+        path.relative_to(default_user_skill_dir())
         return 2
     except ValueError:
         pass
