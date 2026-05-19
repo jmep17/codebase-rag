@@ -522,6 +522,27 @@ def _skill_retry_tool_result(payload: dict, tname: str) -> dict:
     }
 
 
+def _enabled_tool_names(tool_schemas: list[dict]) -> set[str]:
+    names: set[str] = set()
+    for schema in tool_schemas:
+        if not isinstance(schema, dict) or schema.get("type") != "function":
+            continue
+        fn = schema.get("function") or {}
+        name = fn.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
+def _disabled_tool_result(tname: str, enabled_tools: set[str]) -> dict:
+    return {
+        "ok": False,
+        "error": f"tool {tname!r} is not enabled for this session",
+        "tool": tname,
+        "enabled_tools": sorted(enabled_tools),
+    }
+
+
 def _resolve_model(model: str | None) -> str:
     return model or os.environ.get("CODEBASE_RAG_CHAT_MODEL") or CHAT_MODEL
 
@@ -1043,6 +1064,7 @@ def agent_turn(
 
         retry_after_skill_activation = False
         write_tools = ("create_project", "write_file", "edit_file")
+        enabled_tools = _enabled_tool_names(s.tool_schemas)
         for call_index, call in enumerate(tool_calls):
             tname = call["function"]["name"]
             raw_args = call["function"]["arguments"]
@@ -1053,8 +1075,25 @@ def agent_turn(
                     args = {}
             else:
                 args = raw_args
+            if not isinstance(args, dict):
+                args = {}
             audit.log_event(s.meta_dir, s.session, "tool_call", tool=tname, args=args)
             yield ("tool_call_request", tname, args)
+
+            if tname not in enabled_tools:
+                disabled = _disabled_tool_result(tname, enabled_tools)
+                result = json.dumps(disabled)
+                audit.log_event(
+                    s.meta_dir,
+                    s.session,
+                    "tool_result",
+                    tool=tname,
+                    duration_s=0.0,
+                    result=disabled,
+                )
+                yield ("tool_result", tname, args, result, disabled, 0.0)
+                history.append({"role": "tool", "content": result})
+                continue
 
             if tname in write_tools:
                 signal_text, signal_paths = _tool_skill_signals(tname, args)

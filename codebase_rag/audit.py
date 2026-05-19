@@ -11,18 +11,35 @@ from typing import Any
 AUDIT_FILE = "audit.log"
 AUDIT_ROLLOVER_BYTES = 5_000_000
 ARG_LEN_REDACT_THRESHOLD = 256
+SENSITIVE_KEY_PARTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "bearer",
+    "credential",
+    "password",
+    "secret",
+    "token",
+)
 
 
-def _redact(value: Any) -> Any:
+def _is_sensitive_key(key: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower())
+    return any(part in normalized for part in SENSITIVE_KEY_PARTS)
+
+
+def _redact(value: Any, *, key: str = "") -> Any:
     """Long strings → {"_redacted_len": N}. Recurses into dicts/lists."""
+    if key and _is_sensitive_key(key):
+        return {"_redacted": True}
     if isinstance(value, str):
         if len(value) > ARG_LEN_REDACT_THRESHOLD:
             return {"_redacted_len": len(value)}
         return value
     if isinstance(value, dict):
-        return {k: _redact(v) for k, v in value.items()}
+        return {k: _redact(v, key=str(k)) for k, v in value.items()}
     if isinstance(value, list):
-        return [_redact(v) for v in value]
+        return [_redact(v, key=key) for v in value]
     return value
 
 
@@ -49,7 +66,7 @@ def log_event(meta_dir: Path, session: str, event: str, **payload: Any) -> None:
         "ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         "session": session,
         "event": event,
-        **{k: _redact(v) for k, v in payload.items()},
+        **{k: _redact(v, key=k) for k, v in payload.items()},
     }
     try:
         with path.open("a", encoding="utf-8") as f:

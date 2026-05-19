@@ -5,7 +5,7 @@ from pathlib import Path
 
 from codebase_rag import chat
 from codebase_rag import skills as skills_mod
-from codebase_rag.tools import DEFAULT_SHELL_RUNNER
+from codebase_rag.tools import DEFAULT_SHELL_RUNNER, tool_schemas_for
 
 
 def test_loads_bundled_python_skill() -> None:
@@ -104,7 +104,7 @@ def test_agent_turn_activates_skill_before_write(monkeypatch, tmp_path: Path) ->
         collection=object(),
         meta_dir=tmp_path / "meta",
         session="test",
-        tool_schemas=[],
+        tool_schemas=tool_schemas_for(read_only=False),
         web_config=None,
         shell_timeout=30,
         shell_runner=DEFAULT_SHELL_RUNNER,

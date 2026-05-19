@@ -44,6 +44,9 @@ def _parsed_url(url: str) -> urllib.parse.ParseResult:
         raise ValueError("URL must include a host")
     if parsed.username or parsed.password:
         raise ValueError("URL credentials are not allowed")
+    # Accessing .port raises ValueError for malformed ports; validate here so
+    # callers consistently receive a policy error instead of an uncaught crash.
+    _ = parsed.port
     return parsed
 
 

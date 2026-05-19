@@ -29,7 +29,7 @@ from . import audit as audit_mod
 from . import chat as chat_mod
 from . import diagnostics as diagnostics_mod
 from . import index as index_mod
-from .tools import MAX_READ_BYTES, resolve_safe
+from .tools import MAX_READ_BYTES, resolve_safe, tool_schemas_for
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8723
@@ -544,13 +544,18 @@ function handleMessage(msg){
   if(msg.type==="hello"){setSession(msg);eventLine("session ready: "+msg.root, "ok");return;}
   if(msg.type==="token"){if(!activeAssistant) activeAssistant=append("assistant","assistant","");activeAssistant.textContent += msg.piece;chat.scrollTop=chat.scrollHeight;return;}
   if(msg.type==="turn_complete"||msg.type==="turn_done"){activeAssistant=null;return;}
-  if(msg.type==="retrieval"){eventLine("retrieved "+((msg.hits||[]).length)+" context chunks");return;}
-  if(msg.type==="tool_call"){eventLine("tool: "+msg.name);return;}
-  if(msg.type==="tool_result"){eventLine("tool result: "+(msg.ok?"ok":"failed"), msg.ok?"ok":"error");return;}
+  if(msg.type==="retrieved"){eventLine("retrieved "+((msg.chunks||[]).length)+" context chunks");return;}
+  if(msg.type==="tool_call_request"){eventLine("tool: "+msg.tool);return;}
+  if(msg.type==="tool_result"){
+    const ok = !msg.summary || msg.summary.ok !== false;
+    eventLine("tool result: "+msg.tool+" "+(ok?"ok":"failed"), ok?"ok":"error");
+    return;
+  }
+  if(msg.type==="tool_declined"){eventLine("tool declined: "+msg.tool, "warn");return;}
   if(msg.type==="slash_output"){eventLine((msg.lines||[]).map(l=>l.text).join("\\n") || "slash command complete");return;}
   if(msg.type==="confirm"){
     const d=document.createElement("div");d.className="confirm";
-    d.innerHTML="<b>Confirm "+esc(msg.name||"action")+"</b><pre>"+esc(JSON.stringify(msg.preview||msg.args||{}, null, 2))+"</pre><button class='btn primary'>Approve</button> <button class='btn danger'>Decline</button>";
+    d.innerHTML="<b>Confirm "+esc(msg.tool||"action")+"</b><pre>"+esc(JSON.stringify(msg.preview||msg.args||{}, null, 2))+"</pre><button class='btn primary'>Approve</button> <button class='btn danger'>Decline</button>";
     const buttons=d.querySelectorAll("button");
     buttons[0].onclick=()=>{ws.send(JSON.stringify({type:"confirm",approved:true,args:msg.args}));d.remove();};
     buttons[1].onclick=()=>{ws.send(JSON.stringify({type:"confirm",approved:false}));d.remove();};
@@ -1153,6 +1158,13 @@ def create_app(
                         if k in flags:
                             setattr(session, k, bool(flags[k]))
                             changed[k] = bool(flags[k])
+                    if "read_only" in changed:
+                        session.tool_schemas = tool_schemas_for(
+                            read_only=session.read_only,
+                            allow_shell=session.allow_shell and not session.read_only,
+                            allow_web=session.allow_web,
+                        )
+                        changed["tool_count"] = len(session.tool_schemas)
                     await outbox.put({"type": "config_ack", "flags": changed})
                     continue
                 if mtype == "slash":

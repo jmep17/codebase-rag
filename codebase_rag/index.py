@@ -169,11 +169,11 @@ def _find_nested_repos(root: Path) -> list[str]:
     for git_dir in root.rglob(".git"):
         if not git_dir.is_dir():
             continue
-        if any(part in EXCLUDE_DIRS for part in git_dir.parts[:-1]):
-            continue
         try:
             rel = git_dir.parent.relative_to(root)
         except ValueError:
+            continue
+        if any(part in EXCLUDE_DIRS for part in rel.parts):
             continue
         rel_str = str(rel).replace("\\", "/")
         if rel_str == ".":
@@ -212,14 +212,15 @@ def iter_source_files(
     for path in root.rglob("*"):
         if not path.is_file():
             continue
-        if any(part in EXCLUDE_DIRS for part in path.parts):
+        rel_path = path.relative_to(root)
+        if any(part in EXCLUDE_DIRS for part in rel_path.parts):
             continue
         if path.suffix.lower() in EXCLUDE_EXTS:
             continue
         name_lower = path.name.lower()
         if any(name_lower.endswith(pat) for pat in EXCLUDE_NAME_PATTERNS):
             continue
-        rel = str(path.relative_to(root)).replace("\\", "/")
+        rel = str(rel_path).replace("\\", "/")
         if nested_prefixes and rel.startswith(nested_prefixes):
             continue
         if user_excludes and _matches_user_pattern(rel, path.name, user_excludes):
