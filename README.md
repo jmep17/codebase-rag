@@ -372,11 +372,28 @@ When `codebase-rag serve` is running, an IDE extension can also `PUT` the same J
 | `--limit N` | Limit rows; default 50, `0` means all. | `codebase-rag audit --limit 100` |
 | `--pretty` | Pretty-print each audit entry over multiple lines. | `codebase-rag audit --pretty` |
 
-### Serve
+### Browser app
 
-`serve` starts the local browser app plus its HTTP/WebSocket API. It requires `pip install -e '.[serve]'`.
+The simplest way to start the browser UI from this repo is:
+
+```bash
+make cbr-browser
+```
+
+Or, if `codebase-rag` is on your `PATH`:
+
+```bash
+codebase-rag browser
+```
+
+The command prints an `open:` URL with a local access token. Open that full URL
+in your browser. The older `serve` command name still works and accepts the same
+flags.
+
+`browser` starts the local browser app plus its HTTP/WebSocket API. It requires `pip install -e '.[serve]'`.
 If the editable install already exists and your package index blocks build dependencies, install the runtime pieces directly instead: `pip install starlette uvicorn websockets`.
 By default it serves a small built-in app at the printed `open:` URL. Use `--static web/dist` or another built SPA directory only when you want to replace the built-in app with a custom bundle.
+The flags below work with both `codebase-rag browser` and `codebase-rag serve`.
 
 | Flag | What it does | Example |
 |---|---|---|

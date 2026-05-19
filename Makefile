@@ -27,7 +27,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv require-cli install install-dev hooks check fix test smoke doctor chat chat-tui serve install-global uninstall-global chat-safe-shell container-build container-up container-pull-model container-doctor container-index container-chat
+.PHONY: help venv require-cli install install-dev hooks check fix test smoke doctor chat chat-tui cbr-browser serve install-global uninstall-global chat-safe-shell container-build container-up container-pull-model container-doctor container-index container-chat
 
 help:
 	@printf '%s\n' \
@@ -49,6 +49,7 @@ help:
 		'  make chat                Start terminal chat' \
 		'  make chat-tui            Start Textual TUI chat' \
 		'  make chat-safe-shell     Chat with Docker shell runner, network disabled' \
+		'  make cbr-browser         Start the local browser app' \
 		'  make serve               Start loopback HTTP/WebSocket server' \
 		'  make container-build     Build the isolated codebase-rag container' \
 		'  make container-up        Start containerized Ollama on loopback' \
@@ -62,7 +63,7 @@ help:
 		'  TEST_DEPS=pytest         Test-only packages for make install-dev' \
 		'  MODEL=qwen2.5-coder:7b   Model for chat, serve, and doctor targets' \
 		'  ROOT=/path/to/project    Project root for make doctor' \
-		'  HOST=127.0.0.1 PORT=8723 Host/port for make serve' \
+		'  HOST=127.0.0.1 PORT=8723 Host/port for make cbr-browser/serve' \
 		'  SHELL_IMAGE=python:3.13  Docker image for make chat-safe-shell' \
 		'  SHELL_TIMEOUT=60         Per-command timeout for make chat-safe-shell' \
 		'  CBR_OLLAMA_PORT=11435    Host loopback port for containerized Ollama'
@@ -98,6 +99,7 @@ smoke: require-cli
 	"$(CLI)" --help >/dev/null
 	"$(CLI)" chat --help >/dev/null
 	"$(CLI)" serve --help >/dev/null
+	"$(CLI)" browser --help >/dev/null
 	@printf '%s\n' 'CLI smoke: OK'
 
 doctor: require-cli
@@ -108,6 +110,9 @@ chat: require-cli
 
 chat-tui: require-cli
 	"$(CLI)" chat --model "$(MODEL)" --tui
+
+cbr-browser: require-cli
+	"$(CLI)" browser --host "$(HOST)" --port "$(PORT)" --model "$(MODEL)"
 
 serve: require-cli
 	"$(CLI)" serve --host "$(HOST)" --port "$(PORT)" --model "$(MODEL)"

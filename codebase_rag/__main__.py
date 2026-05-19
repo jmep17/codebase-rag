@@ -29,7 +29,7 @@ def _print_missing_command(parser: argparse.ArgumentParser) -> None:
         "\nerror: missing command.\n"
         "  Try:             codebase-rag --help\n"
         "  Terminal chat:    codebase-rag chat\n"
-        "  Browser app:      codebase-rag serve",
+        "  Browser app:      codebase-rag browser",
         file=sys.stderr,
     )
 
@@ -53,6 +53,155 @@ def _print_missing_extra(
         f"  Note: keep the quotes around '.[{extra}]' in zsh.\n"
         f"  Underlying: {error}",
         file=sys.stderr,
+    )
+
+
+def _add_browser_server_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=os.environ.get("CODEBASE_RAG_SERVE_HOST", "127.0.0.1"),
+        help=(
+            "Bind address (default: 127.0.0.1; env: CODEBASE_RAG_SERVE_HOST). "
+            "Anything other than loopback prints a loud warning at startup."
+        ),
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.environ.get("CODEBASE_RAG_SERVE_PORT", "8723")),
+        help="Bind port (default: 8723; env: CODEBASE_RAG_SERVE_PORT).",
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=DEFAULT_DB,
+        help=f"Database path (default: {DEFAULT_DB}).",
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=Path.cwd(),
+        help=(
+            "Default project root for chat sessions when the WS client "
+            "doesn't pick one (default: current working directory)."
+        ),
+    )
+    parser.add_argument(
+        "--static",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help=(
+            "Replace the built-in browser app with a custom built SPA bundle at /. "
+            "Static assets are anonymously readable; the SPA must include ?token=... "
+            "when calling /api/*."
+        ),
+    )
+    parser.add_argument(
+        "--reuse-token",
+        action="store_true",
+        help=(
+            "Keep the existing serve.token instead of rotating on every start. "
+            "Useful for desktop wrappers that respawn the sidecar."
+        ),
+    )
+    parser.add_argument(
+        "--token-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Override token file location (default: <meta-dir>/serve.token).",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress uvicorn access logs.",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Chat model for WS sessions (default: env CODEBASE_RAG_CHAT_MODEL or mistral-nemo).",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="ollama",
+        choices=["ollama", "anthropic"],
+        help="Chat provider for WS sessions (default: ollama).",
+    )
+    parser.add_argument(
+        "--architect-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help="Optional architect model (split architect/coder flow).",
+    )
+    parser.add_argument("--read-only", action="store_true")
+    parser.add_argument("--allow-shell", action="store_true")
+    parser.add_argument(
+        "--shell-runner",
+        type=str,
+        default=DEFAULT_SHELL_RUNNER,
+        metavar="docker:IMAGE",
+    )
+    parser.add_argument(
+        "--shell-network",
+        type=str,
+        default="none",
+        choices=["none", "bridge", "host"],
+    )
+    parser.add_argument("--shell-timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--check-command",
+        type=str,
+        default="",
+        metavar="CMD",
+        help="Run this verification command after WS model edits and report failures.",
+    )
+    parser.add_argument(
+        "--repair-attempts",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Number of model repair passes after --check-command fails.",
+    )
+    parser.add_argument(
+        "--confirm-writes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Prompt before every model-driven create_project, write_file, or edit_file "
+            "in WS sessions (default: on). Use --no-confirm-writes to auto-apply them."
+        ),
+    )
+    parser.add_argument(
+        "--skills",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically inject trusted local skills in WS sessions (default: on).",
+    )
+    parser.add_argument(
+        "--skill-dir",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Additional local skill directory to load for WS sessions. Repeatable.",
+    )
+    parser.add_argument("--allow-web", action="store_true")
+    parser.add_argument(
+        "--web-allow",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
+    )
+    parser.add_argument(
+        "--web-block",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
     )
 
 
@@ -673,153 +822,19 @@ def main() -> None:
     p_serve = subparsers.add_parser(
         "serve",
         help="Start the local browser app and HTTP/WebSocket API.",
-    )
-    p_serve.add_argument(
-        "--host",
-        type=str,
-        default=os.environ.get("CODEBASE_RAG_SERVE_HOST", "127.0.0.1"),
-        help=(
-            "Bind address (default: 127.0.0.1; env: CODEBASE_RAG_SERVE_HOST). "
-            "Anything other than loopback prints a loud warning at startup."
+        description=(
+            "Start the local browser app and HTTP/WebSocket API. "
+            "`codebase-rag browser` is the simpler alias for this command."
         ),
     )
-    p_serve.add_argument(
-        "--port",
-        type=int,
-        default=int(os.environ.get("CODEBASE_RAG_SERVE_PORT", "8723")),
-        help="Bind port (default: 8723; env: CODEBASE_RAG_SERVE_PORT).",
+    _add_browser_server_arguments(p_serve)
+
+    p_browser = subparsers.add_parser(
+        "browser",
+        help="Start the local browser app.",
+        description="Start the local browser app and print the URL to open.",
     )
-    p_serve.add_argument(
-        "--db",
-        type=Path,
-        default=DEFAULT_DB,
-        help=f"Database path (default: {DEFAULT_DB}).",
-    )
-    p_serve.add_argument(
-        "--root",
-        type=Path,
-        default=Path.cwd(),
-        help=(
-            "Default project root for chat sessions when the WS client "
-            "doesn't pick one (default: current working directory)."
-        ),
-    )
-    p_serve.add_argument(
-        "--static",
-        type=Path,
-        default=None,
-        metavar="DIR",
-        help=(
-            "Replace the built-in browser app with a custom built SPA bundle at /. "
-            "Static assets are anonymously readable; the SPA must include ?token=… "
-            "when calling /api/*."
-        ),
-    )
-    p_serve.add_argument(
-        "--reuse-token",
-        action="store_true",
-        help=(
-            "Keep the existing serve.token instead of rotating on every start. "
-            "Useful for desktop wrappers that respawn the sidecar."
-        ),
-    )
-    p_serve.add_argument(
-        "--token-file",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="Override token file location (default: <meta-dir>/serve.token).",
-    )
-    p_serve.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress uvicorn access logs.",
-    )
-    p_serve.add_argument(
-        "--model",
-        type=str,
-        default=None,
-        help="Chat model for WS sessions (default: env CODEBASE_RAG_CHAT_MODEL or mistral-nemo).",
-    )
-    p_serve.add_argument(
-        "--provider",
-        type=str,
-        default="ollama",
-        choices=["ollama", "anthropic"],
-        help="Chat provider for WS sessions (default: ollama).",
-    )
-    p_serve.add_argument(
-        "--architect-model",
-        type=str,
-        default=None,
-        metavar="MODEL",
-        help="Optional architect model (split architect/coder flow).",
-    )
-    p_serve.add_argument("--read-only", action="store_true")
-    p_serve.add_argument("--allow-shell", action="store_true")
-    p_serve.add_argument(
-        "--shell-runner",
-        type=str,
-        default=DEFAULT_SHELL_RUNNER,
-        metavar="docker:IMAGE",
-    )
-    p_serve.add_argument(
-        "--shell-network",
-        type=str,
-        default="none",
-        choices=["none", "bridge", "host"],
-    )
-    p_serve.add_argument("--shell-timeout", type=float, default=30.0)
-    p_serve.add_argument(
-        "--check-command",
-        type=str,
-        default="",
-        metavar="CMD",
-        help="Run this verification command after WS model edits and report failures.",
-    )
-    p_serve.add_argument(
-        "--repair-attempts",
-        type=int,
-        default=0,
-        metavar="N",
-        help="Number of model repair passes after --check-command fails.",
-    )
-    p_serve.add_argument(
-        "--confirm-writes",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help=(
-            "Prompt before every model-driven create_project, write_file, or edit_file "
-            "in WS sessions (default: on). Use --no-confirm-writes to auto-apply them."
-        ),
-    )
-    p_serve.add_argument(
-        "--skills",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Automatically inject trusted local skills in WS sessions (default: on).",
-    )
-    p_serve.add_argument(
-        "--skill-dir",
-        type=Path,
-        action="append",
-        default=[],
-        metavar="PATH",
-        help="Additional local skill directory to load for WS sessions. Repeatable.",
-    )
-    p_serve.add_argument("--allow-web", action="store_true")
-    p_serve.add_argument(
-        "--web-allow",
-        action="append",
-        default=[],
-        metavar="HOST_GLOB",
-    )
-    p_serve.add_argument(
-        "--web-block",
-        action="append",
-        default=[],
-        metavar="HOST_GLOB",
-    )
+    _add_browser_server_arguments(p_browser)
 
     if len(sys.argv) == 1:
         _print_missing_command(parser)
@@ -1021,15 +1036,15 @@ def main() -> None:
             provider_name=args.provider,
             api_key=api_key,
         )
-    elif args.command == "serve":
+    elif args.command in ("serve", "browser"):
         try:
             from . import serve as serve_mod
         except ImportError as e:
             _print_missing_extra(
-                feature="`serve`",
+                feature=f"`{args.command}`",
                 extra="serve",
                 modules=("starlette", "uvicorn", "websockets"),
-                retry=".venv/bin/codebase-rag serve",
+                retry=f".venv/bin/codebase-rag {args.command}",
                 error=e,
             )
             sys.exit(1)
@@ -1067,10 +1082,10 @@ def main() -> None:
             import uvicorn  # noqa: F401
         except ImportError as e:
             _print_missing_extra(
-                feature="`serve`",
+                feature=f"`{args.command}`",
                 extra="serve",
                 modules=("starlette", "uvicorn", "websockets"),
-                retry=".venv/bin/codebase-rag serve",
+                retry=f".venv/bin/codebase-rag {args.command}",
                 error=e,
             )
             sys.exit(1)
