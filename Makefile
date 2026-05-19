@@ -3,6 +3,7 @@ VENV ?= .venv
 BIN_DIR ?= $(HOME)/.local/bin
 COMMAND ?= codebase-rag
 EXTRAS ?=
+MODEL ?= qwen3:8b
 SHELL_IMAGE ?= python:3.13-slim
 SHELL_TIMEOUT ?= 30
 
@@ -24,6 +25,7 @@ help:
 		'' \
 		'Options:' \
 		'  EXTRAS=web,serve         Install optional extras, e.g. make install EXTRAS=web' \
+		'  MODEL=qwen2.5-coder:7b   Chat model for make chat-safe-shell' \
 		'  SHELL_IMAGE=python:3.13  Docker image for make chat-safe-shell' \
 		'  SHELL_TIMEOUT=60         Per-command timeout for make chat-safe-shell'
 
@@ -50,4 +52,4 @@ uninstall-global:
 	@printf 'Removed %s\n' "$(BIN_DIR)/$(COMMAND)"
 
 chat-safe-shell:
-	"$(VENV)/bin/$(COMMAND)" chat --allow-shell --shell-runner "docker:$(SHELL_IMAGE)" --shell-network none --shell-timeout "$(SHELL_TIMEOUT)"
+	"$(VENV)/bin/$(COMMAND)" chat --model "$(MODEL)" --allow-shell --shell-runner "docker:$(SHELL_IMAGE)" --shell-network none --shell-timeout "$(SHELL_TIMEOUT)"
