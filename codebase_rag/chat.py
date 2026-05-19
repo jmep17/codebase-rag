@@ -788,6 +788,7 @@ def agent_turn(
       ("skill_activated", payload)
       ("architect_start", architect_model)
       ("architect_error", err_text)
+      ("inference_start", model, metadata_dict)
       ("token", piece)                          -- both architect and coder
       ("inference_done", content, tool_calls, stats)
       ("error", "context_length"|"provider", message)
@@ -871,6 +872,17 @@ def agent_turn(
             "load_duration": 0.0,
         }
         try:
+            yield (
+                "inference_start",
+                s.architect_model,
+                {
+                    "role": "architect",
+                    "messages": len(architect_history),
+                    "tools": 0,
+                    "context_chunks": len(chunks),
+                    "pinned_files": len(pinned_files),
+                },
+            )
             for ev in s.provider.iter_chat_events(
                 s.architect_model,
                 architect_history,
@@ -922,6 +934,18 @@ def agent_turn(
             "load_duration": 0.0,
         }
         try:
+            yield (
+                "inference_start",
+                s.chat_model,
+                {
+                    "role": "coder",
+                    "round": turn + 1,
+                    "messages": len(history),
+                    "tools": len(s.tool_schemas),
+                    "context_chunks": len(chunks),
+                    "pinned_files": len(pinned_files),
+                },
+            )
             for ev in s.provider.iter_chat_events(
                 s.chat_model,
                 history,
@@ -1283,6 +1307,16 @@ def _drive_line(
             labels = [*payload.get("skills", []), *payload.get("snippets", [])]
             if labels:
                 print(f"  [skills: {' + '.join(labels)}]")
+        elif kind == "inference_start":
+            _, model, meta = event
+            role = meta.get("role", "model")
+            round_note = f" round {meta['round']}" if meta.get("round") else ""
+            pin_note = f", {meta['pinned_files']} pinned" if meta.get("pinned_files") else ""
+            print(
+                f"  [{role}{round_note}: {model} evaluating "
+                f"{meta.get('context_chunks', 0)} chunks{pin_note}, "
+                f"{meta.get('messages', 0)} messages, {meta.get('tools', 0)} tools]"
+            )
         elif kind == "token":
             if response_renderer is None:
                 response_renderer = _LineMarkdownRenderer()

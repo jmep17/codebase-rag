@@ -105,6 +105,7 @@ Turn {
     border-left: thick $border-c;
 }
 .card.retrieval { border-left: thick $info; }
+.card.thinking  { border-left: thick $warn; color: $fg-1; }
 .card.tool      { border-left: thick $purple; }
 .card.answer    {
     border-left: thick $accent;

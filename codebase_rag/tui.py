@@ -25,6 +25,7 @@ from __future__ import annotations
 import difflib
 import json
 import queue
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -925,6 +926,12 @@ class Turn(Vertical):
         self.user_text = user_text
         self._current_answer: Markdown | None = None
         self._answer_buf = ""
+        self._thinking_card: Static | None = None
+        self._thinking_timer = None
+        self._thinking_started_at = 0.0
+        self._thinking_model = ""
+        self._thinking_meta: dict = {}
+        self._suppress_thinking = False
         self._tool_cards: dict[int, Static] = {}
         self._next_tool_key = 0
         self.retrieved_chunks: list[dict] = []
@@ -966,7 +973,58 @@ class Turn(Vertical):
         card = Static(head + "\n" + "\n".join(body_lines), classes="card retrieval")
         await self.mount(card)
 
+    def _thinking_text(self) -> str:
+        elapsed = max(0.0, time.monotonic() - self._thinking_started_at)
+        role = self._thinking_meta.get("role", "model")
+        round_note = (
+            f" round {self._thinking_meta['round']}" if self._thinking_meta.get("round") else ""
+        )
+        pin_note = (
+            f" · {self._thinking_meta['pinned_files']} pinned"
+            if self._thinking_meta.get("pinned_files")
+            else ""
+        )
+        return (
+            f"[bold]model[/]  {role}{round_note}  "
+            f"[#98c9af]{_clip(self._thinking_model, 32)}[/]\n"
+            f"[#5b8b73]evaluating prompt for {elapsed:.1f}s · "
+            f"{self._thinking_meta.get('context_chunks', 0)} chunks{pin_note} · "
+            f"{self._thinking_meta.get('messages', 0)} messages · "
+            f"{self._thinking_meta.get('tools', 0)} tools[/]"
+        )
+
+    def _refresh_thinking(self) -> None:
+        if self._thinking_card is not None:
+            self._thinking_card.update(self._thinking_text())
+
+    def prepare_inference_status(self) -> None:
+        self._suppress_thinking = False
+
+    def suppress_inference_status(self) -> None:
+        self._suppress_thinking = True
+
+    async def add_inference_start(self, model: str, meta: dict) -> None:
+        if self._suppress_thinking:
+            return
+        await self.clear_inference_status()
+        self._thinking_model = model
+        self._thinking_meta = dict(meta)
+        self._thinking_started_at = time.monotonic()
+        self._thinking_card = Static(self._thinking_text(), classes="card thinking")
+        await self.mount(self._thinking_card)
+        self._thinking_timer = self.set_interval(0.5, self._refresh_thinking)
+
+    async def clear_inference_status(self) -> None:
+        if self._thinking_timer is not None:
+            self._thinking_timer.stop()
+            self._thinking_timer = None
+        if self._thinking_card is not None:
+            await self._thinking_card.remove()
+            self._thinking_card = None
+
     async def add_token(self, piece: str) -> None:
+        self.suppress_inference_status()
+        await self.clear_inference_status()
         if self._current_answer is None:
             self._answer_buf = ""
             new_card = Markdown("", classes="card answer", open_links=False)
@@ -976,6 +1034,8 @@ class Turn(Vertical):
         await self._current_answer.update(self._answer_buf)
 
     async def finalize_inference(self, content: str, stats: dict, provider_name: str) -> None:
+        self.suppress_inference_status()
+        await self.clear_inference_status()
         if self._current_answer is None and content.strip():
             self._answer_buf = content
             self._current_answer = Markdown(content, classes="card answer", open_links=False)
@@ -994,6 +1054,8 @@ class Turn(Vertical):
         await self.mount(Static(stats_line, classes="turn-meta"))
 
     async def add_tool_card(self, tname: str, args: dict) -> int:
+        self.suppress_inference_status()
+        await self.clear_inference_status()
         key = self._next_tool_key
         self._next_tool_key += 1
         argstr = ", ".join(args.keys()) if args else ""
@@ -1430,15 +1492,18 @@ class CodebaseRagApp(App):
             _, chunks, pinned, elapsed = event
             self.run_worker(turn.add_retrieval(chunks, pinned, elapsed), exclusive=False)
         elif kind == "token":
+            turn.suppress_inference_status()
             self.run_worker(turn.add_token(event[1]), exclusive=False)
         elif kind == "inference_done":
             _, content, _tool_calls, stats = event
+            turn.suppress_inference_status()
             self.run_worker(
                 turn.finalize_inference(content, stats, self.session.provider.name),
                 exclusive=False,
             )
         elif kind == "tool_call_request":
             _, tname, args = event
+            turn.suppress_inference_status()
 
             async def _add_and_remember() -> None:
                 key = await turn.add_tool_card(tname, args)
@@ -1486,8 +1551,14 @@ class CodebaseRagApp(App):
                 exclusive=False,
             )
         elif kind == "architect_error":
+            turn.suppress_inference_status()
+
+            async def _clear_and_mark_architect_error() -> None:
+                await turn.clear_inference_status()
+                await turn.add_marker(f"[#f87171](architect error: {event[1]}; falling back)[/]")
+
             self.run_worker(
-                turn.add_marker(f"[#f87171](architect error: {event[1]}; falling back)[/]"),
+                _clear_and_mark_architect_error(),
                 exclusive=False,
             )
         elif kind == "skill_activated":
@@ -1498,13 +1569,23 @@ class CodebaseRagApp(App):
                     turn.add_marker(f"[#a7f3d0][skills: {' + '.join(labels)}][/]"),
                     exclusive=False,
                 )
+        elif kind == "inference_start":
+            _, model, meta = event
+            turn.prepare_inference_status()
+            self.run_worker(turn.add_inference_start(model, meta), exclusive=False)
         elif kind == "empty_response":
             self.run_worker(turn.add_marker("[#5b8b73](no response)[/]"), exclusive=False)
         elif kind == "error":
             _, sub, msg = event
             tag = "context-length" if sub == "context_length" else sub
+            turn.suppress_inference_status()
+
+            async def _clear_and_mark_error() -> None:
+                await turn.clear_inference_status()
+                await turn.add_marker(f"[#f87171]({tag}: {msg})[/]")
+
             self.run_worker(
-                turn.add_marker(f"[#f87171]({tag}: {msg})[/]"),
+                _clear_and_mark_error(),
                 exclusive=False,
             )
         elif kind == "max_turns":
