@@ -36,11 +36,12 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["codebase_rag"]
+packages = ["codebase_rag", "codebase_rag.skills"]
 include-package-data = true
 
 [tool.setuptools.package-data]
 codebase_rag = ["*.tcss"]
+"codebase_rag.skills" = ["python/*", "python/snippets/*"]
 
 [tool.ruff]
 line-length = 100

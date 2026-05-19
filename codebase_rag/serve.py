@@ -287,6 +287,8 @@ def _serialize_event(
         return {"type": "architect_start", "turn": turn_id, "model": event[1]}
     if kind == "architect_error":
         return {"type": "architect_error", "turn": turn_id, "message": event[1]}
+    if kind == "skill_activated":
+        return {"type": "skill_activated", "turn": turn_id, **event[1]}
     if kind == "token":
         return {"type": "token", "turn": turn_id, "piece": event[1]}
     if kind == "inference_done":
@@ -795,6 +797,9 @@ to serve a built SPA at this URL.</p>
                     "shell_timeout": session.shell_timeout,
                     "check_command": session.check_command,
                     "repair_attempts": session.repair_attempts,
+                    "skills_enabled": session.skills_enabled,
+                    "skill_count": len(session.skill_library),
+                    "skill_dirs": [str(p) for p in session.skill_dirs],
                 },
                 "slash_specs": [
                     {
@@ -1123,6 +1128,7 @@ def _print_banner(
     print(f"  root:     {root}")
     print(f"  db:       {db_path}")
     print(f"  provider: {provider}   model: {model}")
+    print(f"  skills:   {'auto' if chat_defaults.get('skills_enabled', True) else 'disabled'}")
     print(f"  token:    {truncated}    (file: {token_path}, mode 0600)")
     print(f"  static:   {static_dir or '(none — REST + WS only)'}")
     if not is_loopback:

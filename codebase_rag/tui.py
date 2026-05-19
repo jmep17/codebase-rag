@@ -1491,6 +1491,14 @@ class CodebaseRagApp(App):
                 turn.add_marker(f"[#f87171](architect error: {event[1]}; falling back)[/]"),
                 exclusive=False,
             )
+        elif kind == "skill_activated":
+            payload = event[1]
+            labels = [*payload.get("skills", []), *payload.get("snippets", [])]
+            if labels:
+                self.run_worker(
+                    turn.add_marker(f"[#a7f3d0][skills: {' + '.join(labels)}][/]"),
+                    exclusive=False,
+                )
         elif kind == "empty_response":
             self.run_worker(turn.add_marker("[#5b8b73](no response)[/]"), exclusive=False)
         elif kind == "error":
@@ -1553,6 +1561,8 @@ def run_tui(
     check_command: str = "",
     repair_attempts: int = 0,
     confirm_writes: bool = True,
+    skills_enabled: bool = True,
+    skill_dirs: tuple[Path, ...] = (),
     allow_web: bool = False,
     web_allow: tuple[str, ...] = (),
     web_block: tuple[str, ...] = (),
@@ -1575,6 +1585,8 @@ def run_tui(
         check_command=check_command,
         repair_attempts=repair_attempts,
         confirm_writes=confirm_writes,
+        skills_enabled=skills_enabled,
+        skill_dirs=skill_dirs,
         allow_web=allow_web,
         web_allow=web_allow,
         web_block=web_block,

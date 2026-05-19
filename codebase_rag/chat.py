@@ -17,6 +17,7 @@ import chromadb
 import ollama
 
 from . import audit, gitops, providers
+from . import skills as skills_mod
 from .index import (
     CHROMA_SETTINGS,
     EMBEDDING_MODEL,
@@ -403,6 +404,123 @@ def _system_prompt_for(root: Path) -> str:
     )
 
 
+def _repo_skill_paths(root: Path) -> tuple[str, ...]:
+    """Small repository signal set for automatic skill activation."""
+    paths: list[str] = []
+    for name in (
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py",
+        "setup.cfg",
+        "Pipfile",
+        "poetry.lock",
+    ):
+        if (root / name).is_file():
+            paths.append(name)
+    try:
+        for path in root.rglob("*.py"):
+            if len(paths) >= 40:
+                break
+            parts = set(path.relative_to(root).parts)
+            if parts & {".git", ".venv", "venv", "__pycache__", "node_modules"}:
+                continue
+            paths.append(str(path.relative_to(root)))
+    except OSError:
+        pass
+    return tuple(dict.fromkeys(paths))
+
+
+def _refresh_system_prompt(session: ChatSession) -> None:
+    block = skills_mod.render_active_block(session.active_skills, session.active_snippets)
+    session.history[0]["content"] = (
+        session.base_system_prompt if not block else f"{session.base_system_prompt}\n\n{block}"
+    )
+
+
+def _activate_skills(
+    session: ChatSession,
+    *,
+    text: str,
+    paths: tuple[str, ...],
+    trigger: str,
+) -> dict | None:
+    if not session.skills_enabled or not session.skill_library:
+        return None
+    matches = skills_mod.detect_matches(
+        session.skill_library,
+        text=text,
+        paths=paths,
+        active_skill_ids=set(session.active_skills),
+        active_snippet_ids=set(session.active_snippets),
+    )
+    if not matches:
+        return None
+    for match in matches:
+        session.active_skills[match.skill.id] = match.skill
+        for snip in match.snippets:
+            session.active_snippets[snip.id] = snip
+    _refresh_system_prompt(session)
+    payload = skills_mod.matches_to_event(matches)
+    payload["trigger"] = trigger
+    audit.log_event(
+        session.meta_dir,
+        session.session,
+        "skill_activated",
+        trigger=trigger,
+        skills=payload["skills"],
+        snippets=payload["snippets"],
+        sources=payload["sources"],
+        reasons=payload["reasons"],
+    )
+    return payload
+
+
+def _tool_skill_signals(tname: str, args: dict) -> tuple[str, tuple[str, ...]]:
+    paths: list[str] = []
+    text_parts: list[str] = [tname]
+    if tname == "create_project":
+        project_path = str(args.get("project_path") or "")
+        if project_path:
+            paths.append(project_path)
+            text_parts.append(project_path)
+        files = args.get("files")
+        if isinstance(files, list):
+            for item in files:
+                if not isinstance(item, dict):
+                    continue
+                rel = str(item.get("path") or "")
+                content = item.get("content")
+                if rel:
+                    paths.append(f"{project_path}/{rel}" if project_path else rel)
+                    text_parts.append(rel)
+                if isinstance(content, str):
+                    text_parts.append(content[:20_000])
+    elif tname in ("write_file", "edit_file"):
+        rel = str(args.get("path") or "")
+        if rel:
+            paths.append(rel)
+            text_parts.append(rel)
+        for key in ("content", "old_string", "new_string"):
+            value = args.get(key)
+            if isinstance(value, str):
+                text_parts.append(value[:40_000])
+    return "\n".join(text_parts), tuple(paths)
+
+
+def _skill_retry_tool_result(payload: dict, tname: str) -> dict:
+    return {
+        "ok": False,
+        "error": (
+            "local skill guidance was activated before this write ran; "
+            "retry the tool call using the active skill guidance"
+        ),
+        "tool": tname,
+        "skill_guidance_activated": True,
+        "skills": payload.get("skills", []),
+        "snippets": payload.get("snippets", []),
+    }
+
+
 def _resolve_model(model: str | None) -> str:
     return model or os.environ.get("CODEBASE_RAG_CHAT_MODEL") or CHAT_MODEL
 
@@ -449,6 +567,12 @@ class ChatSession:
     check_command: str
     repair_attempts: int
     confirm_writes: bool
+    skills_enabled: bool
+    skill_dirs: tuple[Path, ...]
+    skill_library: list[skills_mod.Skill]
+    active_skills: dict[str, skills_mod.Skill]
+    active_snippets: dict[str, skills_mod.Snippet]
+    base_system_prompt: str
     history: list[dict]
     pinned_paths: list[str]
     touched_files: set[str]
@@ -502,6 +626,8 @@ def init_chat_session(
     check_command: str = "",
     repair_attempts: int = 0,
     confirm_writes: bool = True,
+    skills_enabled: bool = True,
+    skill_dirs: tuple[Path, ...] = (),
     allow_web: bool = False,
     web_allow: tuple[str, ...] = (),
     web_block: tuple[str, ...] = (),
@@ -576,6 +702,8 @@ def init_chat_session(
         check_command=check_command,
         repair_attempts=repair_attempts,
         confirm_writes=confirm_writes,
+        skills_enabled=skills_enabled,
+        skill_dirs=[str(p) for p in skill_dirs],
         allow_web=allow_web,
         web_allow=list(web_allow),
         web_block=list(web_block),
@@ -583,6 +711,7 @@ def init_chat_session(
         architect_model=architect_model or "",
     )
 
+    skill_library = skills_mod.load_skill_library(skill_dirs) if skills_enabled else []
     system_prompt = _system_prompt_for(root)
     history: list[dict] = [{"role": "system", "content": system_prompt}]
     pinned_paths: list[str] = []
@@ -621,6 +750,12 @@ def init_chat_session(
         check_command=check_command,
         repair_attempts=repair_attempts,
         confirm_writes=confirm_writes,
+        skills_enabled=skills_enabled,
+        skill_dirs=skill_dirs,
+        skill_library=skill_library,
+        active_skills={},
+        active_snippets={},
+        base_system_prompt=system_prompt,
         history=history,
         pinned_paths=pinned_paths,
         touched_files=set(),
@@ -650,6 +785,7 @@ def agent_turn(
 
     Events:
       ("retrieved", chunks, pinned_files, retrieve_elapsed)
+      ("skill_activated", payload)
       ("architect_start", architect_model)
       ("architect_error", err_text)
       ("token", piece)                          -- both architect and coder
@@ -681,6 +817,33 @@ def agent_turn(
     context = format_context(chunks, pinned=pinned_files)
 
     yield ("retrieved", chunks, pinned_files, retrieve_elapsed)
+
+    skill_paths = tuple(
+        dict.fromkeys(
+            [
+                *(c.get("path", "") for c in chunks if c.get("path")),
+                *(p.get("path", "") for p in pinned_files if p.get("path")),
+                *_repo_skill_paths(s.root),
+            ]
+        )
+    )
+    skill_text = "\n".join(
+        [
+            user_input,
+            *(c.get("path", "") for c in chunks if c.get("path")),
+            *(c.get("content", "")[:20_000] for c in chunks if c.get("content")),
+            *(p.get("path", "") for p in pinned_files if p.get("path")),
+            *(p.get("content", "")[:20_000] for p in pinned_files if p.get("content")),
+        ]
+    )
+    skill_payload = _activate_skills(
+        s,
+        text=skill_text,
+        paths=skill_paths,
+        trigger="turn",
+    )
+    if skill_payload:
+        yield ("skill_activated", skill_payload)
 
     augmented = f"Context from codebase:\n\n{context}\n\n---\n\nQuestion: {user_input}"
     history.append({"role": "user", "content": augmented})
@@ -853,7 +1016,9 @@ def agent_turn(
             stop_reason = "complete"
             break
 
-        for call in tool_calls:
+        retry_after_skill_activation = False
+        write_tools = ("create_project", "write_file", "edit_file")
+        for call_index, call in enumerate(tool_calls):
             tname = call["function"]["name"]
             raw_args = call["function"]["arguments"]
             if isinstance(raw_args, str):
@@ -866,7 +1031,35 @@ def agent_turn(
             audit.log_event(s.meta_dir, s.session, "tool_call", tool=tname, args=args)
             yield ("tool_call_request", tname, args)
 
-            write_tools = ("create_project", "write_file", "edit_file")
+            if tname in write_tools:
+                signal_text, signal_paths = _tool_skill_signals(tname, args)
+                skill_payload = _activate_skills(
+                    s,
+                    text=signal_text,
+                    paths=signal_paths,
+                    trigger=f"pre_write:{tname}",
+                )
+                if skill_payload:
+                    yield ("skill_activated", skill_payload)
+                    skipped = _skill_retry_tool_result(skill_payload, tname)
+                    result = json.dumps(skipped)
+                    audit.log_event(
+                        s.meta_dir,
+                        s.session,
+                        "tool_result",
+                        tool=tname,
+                        duration_s=0.0,
+                        result=skipped,
+                    )
+                    yield ("tool_result", tname, args, result, skipped, 0.0)
+                    history.append({"role": "tool", "content": result})
+                    for remaining in tool_calls[call_index + 1 :]:
+                        remaining_name = remaining.get("function", {}).get("name", "unknown")
+                        skipped_remaining = _skill_retry_tool_result(skill_payload, remaining_name)
+                        history.append({"role": "tool", "content": json.dumps(skipped_remaining)})
+                    retry_after_skill_activation = True
+                    break
+
             needs_confirm = tname == "run_shell" or (s.confirm_writes and tname in write_tools)
             if needs_confirm:
                 resolved = yield ("confirm", tname, args)
@@ -931,6 +1124,18 @@ def agent_turn(
             )
             yield ("tool_result", tname, args, result, summary, tool_elapsed)
             history.append({"role": "tool", "content": result})
+        if retry_after_skill_activation:
+            history.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Local skill guidance was just activated before a write ran. "
+                        "Retry your previous tool call now, applying the active skill guidance. "
+                        "Do not describe the change without using the appropriate tool."
+                    ),
+                }
+            )
+            continue
     else:
         stop_reason = "max_turns"
         yield ("max_turns", MAX_TURNS)
@@ -1073,6 +1278,11 @@ def _drive_line(
             print(f"  [architect ({event[1]}) thinking…]")
         elif kind == "architect_error":
             print(f"  (architect error: {event[1]}; falling back to single-model flow)")
+        elif kind == "skill_activated":
+            payload = event[1]
+            labels = [*payload.get("skills", []), *payload.get("snippets", [])]
+            if labels:
+                print(f"  [skills: {' + '.join(labels)}]")
         elif kind == "token":
             if response_renderer is None:
                 response_renderer = _LineMarkdownRenderer()
@@ -1194,10 +1404,15 @@ def _print_banner(session: ChatSession) -> None:
     if s.check_command:
         repair_note = f", repairs={s.repair_attempts}" if s.repair_attempts > 0 else ", no repairs"
         check_marker = f"  [check: {s.check_command}{repair_note}]"
+    skills_marker = (
+        f"  [skills: auto, {len(s.skill_library)} available]"
+        if s.skills_enabled
+        else "  [skills: disabled]"
+    )
     provider_marker = f"  [provider: {s.provider_name}]" if s.provider_name != "ollama" else ""
     name = collection_name_for(s.root)
     print(
-        f"Chatting with {s.chat_model}.{provider_marker}{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}{check_marker}\n"
+        f"Chatting with {s.chat_model}.{provider_marker}{read_only_marker}{git_marker}{shell_marker}{confirm_marker}{web_marker}{arch_marker}{check_marker}{skills_marker}\n"
         f"Project: {s.root}  (collection: {name}, {s.notes_marker})"
         f"{s.resumed_marker}\n"
         f"Type :q or Ctrl-D to exit, :reset to clear history, :forget to delete the saved conversation."
@@ -1671,6 +1886,8 @@ def agent_loop(
     check_command: str = "",
     repair_attempts: int = 0,
     confirm_writes: bool = True,
+    skills_enabled: bool = True,
+    skill_dirs: tuple[Path, ...] = (),
     allow_web: bool = False,
     web_allow: tuple[str, ...] = (),
     web_block: tuple[str, ...] = (),
@@ -1697,6 +1914,8 @@ def agent_loop(
         check_command=check_command,
         repair_attempts=repair_attempts,
         confirm_writes=confirm_writes,
+        skills_enabled=skills_enabled,
+        skill_dirs=skill_dirs,
         allow_web=allow_web,
         web_allow=web_allow,
         web_block=web_block,

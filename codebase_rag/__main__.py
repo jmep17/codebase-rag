@@ -523,6 +523,26 @@ def main() -> None:
         ),
     )
     p_chat.add_argument(
+        "--skills",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Automatically inject trusted local skill guidance and snippets when relevant "
+            "(default: on). Use --no-skills for raw model behavior."
+        ),
+    )
+    p_chat.add_argument(
+        "--skill-dir",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Additional local skill directory to load. May point at one skill or a directory "
+            "containing multiple skills. Repeatable."
+        ),
+    )
+    p_chat.add_argument(
         "--allow-web",
         action="store_true",
         help=(
@@ -705,6 +725,20 @@ def main() -> None:
             "in WS sessions (default: on). Use --no-confirm-writes to auto-apply them."
         ),
     )
+    p_serve.add_argument(
+        "--skills",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Automatically inject trusted local skills in WS sessions (default: on).",
+    )
+    p_serve.add_argument(
+        "--skill-dir",
+        type=Path,
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="Additional local skill directory to load for WS sessions. Repeatable.",
+    )
     p_serve.add_argument("--allow-web", action="store_true")
     p_serve.add_argument(
         "--web-allow",
@@ -843,6 +877,8 @@ def main() -> None:
                 check_command=args.check_command,
                 repair_attempts=max(0, args.repair_attempts),
                 confirm_writes=args.confirm_writes,
+                skills_enabled=args.skills,
+                skill_dirs=tuple(p.resolve() for p in args.skill_dir),
                 allow_web=args.allow_web,
                 web_allow=tuple(args.web_allow),
                 web_block=tuple(args.web_block),
@@ -865,6 +901,8 @@ def main() -> None:
             check_command=args.check_command,
             repair_attempts=max(0, args.repair_attempts),
             confirm_writes=args.confirm_writes,
+            skills_enabled=args.skills,
+            skill_dirs=tuple(p.resolve() for p in args.skill_dir),
             allow_web=args.allow_web,
             web_allow=tuple(args.web_allow),
             web_block=tuple(args.web_block),
@@ -947,6 +985,8 @@ def main() -> None:
                 check_command=args.check_command,
                 repair_attempts=max(0, args.repair_attempts),
                 confirm_writes=args.confirm_writes,
+                skills_enabled=args.skills,
+                skill_dirs=tuple(p.resolve() for p in args.skill_dir),
                 allow_web=args.allow_web,
                 web_allow=tuple(args.web_allow),
                 web_block=tuple(args.web_block),

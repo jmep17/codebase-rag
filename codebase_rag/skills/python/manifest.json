@@ -1,0 +1,22 @@
+{
+  "id": "python",
+  "name": "Python",
+  "triggers": [
+    "python",
+    "pytest",
+    "pyproject",
+    "argparse",
+    "fastapi",
+    "pydantic",
+    "httpx"
+  ],
+  "file_globs": [
+    "*.py",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "setup.cfg"
+  ],
+  "snippet_budget": 1800,
+  "priority": 100
+}
