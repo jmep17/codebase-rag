@@ -490,6 +490,14 @@ codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim --shell-n
 codebase-rag chat --allow-shell --shell-timeout 60
 ```
 
+From this repository checkout, the Makefile has a shortcut for the safer Docker/no-network shell setup:
+
+```bash
+make chat-safe-shell                                           # model qwen3:8b, 30s timeout
+make chat-safe-shell MODEL=qwen2.5-coder:7b
+make chat-safe-shell SHELL_IMAGE=python:3.13 SHELL_TIMEOUT=60
+```
+
 - **`run_shell` tool** — the model can request a shell command. Always prompts `[y/N/edit]` first.
 - **`:run <cmd>`** — you run a command directly; output is added to history for the next turn.
 - **Sandbox (host):** `cwd` pinned to root, `shell=False`, `shlex.split` parsing (no `$VAR`/pipes/backticks), 30s timeout, output capped at 50KB, env scrubbed (no `ANTHROPIC_API_KEY`, etc.).
