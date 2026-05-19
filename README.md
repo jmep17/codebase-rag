@@ -37,6 +37,23 @@ ollama pull nomic-embed-text
 pip install -e .
 ```
 
+To make `codebase-rag` available from any directory without activating the
+virtual environment, install the global wrapper:
+
+```bash
+make install-global
+codebase-rag --help
+```
+
+This creates `.venv` if needed, installs the package editable into that venv,
+then writes a tiny executable wrapper to `~/.local/bin/codebase-rag`. Make sure
+`~/.local/bin` is on your `PATH`; the Makefile prints a reminder if it is not.
+Install optional extras the same way:
+
+```bash
+make install-global EXTRAS=web,serve,tui
+```
+
 ### Install troubleshooting
 
 If `pip install -e .` fails after activating a virtual environment, first make sure `pip` belongs to that environment:
