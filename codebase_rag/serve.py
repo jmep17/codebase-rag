@@ -18,7 +18,10 @@ import json
 import os
 import secrets
 import sys
+import threading
+import time
 import uuid
+import webbrowser
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1351,6 +1354,23 @@ def _print_banner(
     sys.stdout.flush()
 
 
+def _open_browser_after_start(url: str) -> None:
+    def opener() -> None:
+        time.sleep(0.5)
+        try:
+            opened = webbrowser.open(url)
+        except Exception as e:  # pragma: no cover - depends on host desktop
+            print(f"  warn: could not open browser automatically: {e}", file=sys.stderr)
+            return
+        if not opened:
+            print(
+                "  warn: browser did not open automatically; use the open URL above",
+                file=sys.stderr,
+            )
+
+    threading.Thread(target=opener, daemon=True).start()
+
+
 def run(
     *,
     host: str = DEFAULT_HOST,
@@ -1361,6 +1381,7 @@ def run(
     reuse_token: bool = False,
     token_file: Path | None = None,
     quiet: bool = False,
+    open_browser: bool = False,
     chat_defaults: dict[str, Any] | None = None,
 ) -> None:
     """Issue a token (or reuse existing), print the banner, launch uvicorn."""
@@ -1416,6 +1437,8 @@ def run(
         static_dir,
         chat_defaults or {},
     )
+    if open_browser:
+        _open_browser_after_start(f"http://{host}:{port}/?token={token}")
 
     uvicorn.run(
         app,

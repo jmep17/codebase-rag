@@ -119,6 +119,12 @@ def _add_browser_server_arguments(parser: argparse.ArgumentParser) -> None:
         help="Suppress uvicorn access logs.",
     )
     parser.add_argument(
+        "--open",
+        dest="open_browser",
+        action="store_true",
+        help="Open the local app URL in the default browser after starting.",
+    )
+    parser.add_argument(
         "--model",
         type=str,
         default=None,
@@ -1098,6 +1104,7 @@ def main() -> None:
             reuse_token=args.reuse_token,
             token_file=args.token_file,
             quiet=args.quiet,
+            open_browser=args.open_browser,
             chat_defaults=dict(
                 model=args.model,
                 provider_name=args.provider,

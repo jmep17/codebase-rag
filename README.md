@@ -53,6 +53,17 @@ Install optional extras the same way:
 make install-global EXTRAS=web,serve,tui
 ```
 
+For the shortest browser-app command outside the virtual environment:
+
+```bash
+make install-cbr-browser
+cbr-browser
+```
+
+That installs the `[serve]` extra into this repo's `.venv`, writes
+`~/.local/bin/cbr-browser`, starts the local server, and opens the app in your
+default browser.
+
 ### Install troubleshooting
 
 If `pip install -e .` fails after activating a virtual environment, first make sure `pip` belongs to that environment:
@@ -226,19 +237,19 @@ Each indexed project lives in its own ChromaDB collection, keyed by the absolute
 The bundled Compose setup keeps Ollama model blobs and codebase-rag state in Docker volumes, and mounts the project read-only at `/work` by default. This is useful for work-laptop separation or for testing with a disposable assistant state directory.
 
 ```bash
-make container-build
-make container-up
-make container-pull-model MODEL=qwen3:8b
+make cbr-container-build
+make cbr-container-up
+make cbr-container-pull-model MODEL=qwen3:8b
 
-make container-index ROOT=/Users/jorden/code/my-project MODEL=qwen3:8b
-make container-chat ROOT=/Users/jorden/code/my-project MODEL=qwen3:8b
+make cbr-container-index ROOT=/Users/jorden/code/my-project MODEL=qwen3:8b
+make cbr-container-chat ROOT=/Users/jorden/code/my-project MODEL=qwen3:8b
 ```
 
 Details:
 
 - Ollama runs in the `cbr-ollama` Docker volume with `OLLAMA_NO_CLOUD=1`.
 - codebase-rag state lives in the `cbr-state` Docker volume at `/data/codebase-rag`.
-- The project mount is read-only for `container-chat`; use the native CLI for write/edit sessions unless you intentionally change the Compose mount.
+- The project mount is read-only for `cbr-container-chat`; use the native CLI for write/edit sessions unless you intentionally change the Compose mount.
 - Containerized Ollama is exposed only on host loopback at `127.0.0.1:11435` by default (`CBR_OLLAMA_PORT=...` to change it).
 - Do not mount the Docker socket into this container; that would give the agent broad control over Docker on the host.
 
@@ -380,14 +391,22 @@ The simplest way to start the browser UI from this repo is:
 make cbr-browser
 ```
 
+For a one-word command that works outside this repo and without activating the
+virtual environment, install the browser launcher once:
+
+```bash
+make install-cbr-browser
+cbr-browser
+```
+
 Or, if `codebase-rag` is on your `PATH`:
 
 ```bash
-codebase-rag browser
+codebase-rag browser --open
 ```
 
 The command prints an `open:` URL with a local access token. Open that full URL
-in your browser. The older `serve` command name still works and accepts the same
+in your browser if it does not open automatically. The older `serve` command name still works and accepts the same
 flags.
 
 `browser` starts the local browser app plus its HTTP/WebSocket API. It requires `pip install -e '.[serve]'`.
@@ -574,9 +593,9 @@ codebase-rag chat --allow-shell --shell-timeout 60
 From this repository checkout, the Makefile has a shortcut for the safer Docker/no-network shell setup:
 
 ```bash
-make chat-safe-shell                                           # model qwen3:8b, 30s timeout
-make chat-safe-shell MODEL=qwen2.5-coder:7b
-make chat-safe-shell SHELL_IMAGE=python:3.13 SHELL_TIMEOUT=60
+make cbr-chat-safe-shell                                       # model qwen3:8b, 30s timeout
+make cbr-chat-safe-shell MODEL=qwen2.5-coder:7b
+make cbr-chat-safe-shell SHELL_IMAGE=python:3.13 SHELL_TIMEOUT=60
 ```
 
 - **`run_shell` tool** — the model can request a shell command. Always prompts `[y/N/edit]` first.

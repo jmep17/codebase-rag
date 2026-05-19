@@ -2,6 +2,7 @@ PYTHON ?= python3
 VENV ?= .venv
 BIN_DIR ?= $(HOME)/.local/bin
 COMMAND ?= codebase-rag
+BROWSER_COMMAND ?= cbr-browser
 EXTRAS ?=
 DEV_EXTRAS ?= dev
 TEST_DEPS ?= pytest
@@ -27,7 +28,7 @@ endif
 
 .DEFAULT_GOAL := help
 
-.PHONY: help venv require-cli install install-dev hooks check fix test smoke doctor chat chat-tui cbr-browser serve install-global uninstall-global chat-safe-shell container-build container-up container-pull-model container-doctor container-index container-chat
+.PHONY: help venv require-cli install install-dev hooks check fix test smoke cbr-doctor doctor cbr-chat chat cbr-chat-tui chat-tui cbr-browser cbr-serve serve install-global uninstall-global install-cbr-browser uninstall-cbr-browser cbr-chat-safe-shell chat-safe-shell cbr-container-build container-build cbr-container-up container-up cbr-container-pull-model container-pull-model cbr-container-doctor container-doctor cbr-container-index container-index cbr-container-chat container-chat
 
 help:
 	@printf '%s\n' \
@@ -36,36 +37,39 @@ help:
 		'  make install-dev         Install editable package plus dev tooling' \
 		'  make hooks               Enable this repo'\''s committed git hooks' \
 		'  make install-global      Install a PATH wrapper at ~/.local/bin/codebase-rag' \
+		'  make install-cbr-browser Install a one-word browser launcher' \
 		'  make uninstall-global    Remove the PATH wrapper' \
+		'  make uninstall-cbr-browser Remove the browser launcher' \
 		'' \
 		'Checks:' \
 		'  make check               Run AST, ruff format --check, and ruff check' \
 		'  make fix                 Run formatter and safe lint fixes' \
 		'  make test                Run pytest tests' \
 		'  make smoke               Check the main CLI help paths' \
-		'  make doctor              Check local setup for ROOT and MODEL' \
+		'  make cbr-doctor          Check local setup for ROOT and MODEL' \
 		'' \
 		'Run:' \
-		'  make chat                Start terminal chat' \
-		'  make chat-tui            Start Textual TUI chat' \
-		'  make chat-safe-shell     Chat with Docker shell runner, network disabled' \
+		'  make cbr-chat            Start terminal chat' \
+		'  make cbr-chat-tui        Start Textual TUI chat' \
+		'  make cbr-chat-safe-shell Chat with Docker shell runner, network disabled' \
 		'  make cbr-browser         Start the local browser app' \
-		'  make serve               Start loopback HTTP/WebSocket server' \
-		'  make container-build     Build the isolated codebase-rag container' \
-		'  make container-up        Start containerized Ollama on loopback' \
-		'  make container-pull-model Pull MODEL into the Ollama Docker volume' \
-		'  make container-index     Index ROOT into the container state volume' \
-		'  make container-chat      Chat read-only against ROOT in containers' \
+		'  make cbr-serve           Start loopback HTTP/WebSocket server' \
+		'  make cbr-container-build Build the isolated codebase-rag container' \
+		'  make cbr-container-up    Start containerized Ollama on loopback' \
+		'  make cbr-container-pull-model Pull MODEL into the Ollama Docker volume' \
+		'  make cbr-container-index Index ROOT into the container state volume' \
+		'  make cbr-container-chat  Chat read-only against ROOT in containers' \
 		'' \
 		'Options:' \
 		'  EXTRAS=web,serve,tui     Install optional extras' \
 		'  DEV_EXTRAS=dev           Extra used by make install-dev' \
 		'  TEST_DEPS=pytest         Test-only packages for make install-dev' \
-		'  MODEL=qwen2.5-coder:7b   Model for chat, serve, and doctor targets' \
-		'  ROOT=/path/to/project    Project root for make doctor' \
-		'  HOST=127.0.0.1 PORT=8723 Host/port for make cbr-browser/serve' \
-		'  SHELL_IMAGE=python:3.13  Docker image for make chat-safe-shell' \
-		'  SHELL_TIMEOUT=60         Per-command timeout for make chat-safe-shell' \
+		'  BROWSER_COMMAND=cbr-browser Global browser launcher name' \
+		'  MODEL=qwen2.5-coder:7b   Model for cbr-chat, cbr-serve, and cbr-doctor' \
+		'  ROOT=/path/to/project    Project root for cbr-doctor and cbr-container-*' \
+		'  HOST=127.0.0.1 PORT=8723 Host/port for cbr-browser/cbr-serve' \
+		'  SHELL_IMAGE=python:3.13  Docker image for cbr-chat-safe-shell' \
+		'  SHELL_TIMEOUT=60         Per-command timeout for cbr-chat-safe-shell' \
 		'  CBR_OLLAMA_PORT=11435    Host loopback port for containerized Ollama'
 
 venv: $(VENV_PY)
@@ -102,20 +106,28 @@ smoke: require-cli
 	"$(CLI)" browser --help >/dev/null
 	@printf '%s\n' 'CLI smoke: OK'
 
-doctor: require-cli
+cbr-doctor: require-cli
 	"$(CLI)" doctor --root "$(ROOT)" --model "$(MODEL)"
 
-chat: require-cli
+doctor: cbr-doctor
+
+cbr-chat: require-cli
 	"$(CLI)" chat --model "$(MODEL)"
 
-chat-tui: require-cli
+chat: cbr-chat
+
+cbr-chat-tui: require-cli
 	"$(CLI)" chat --model "$(MODEL)" --tui
+
+chat-tui: cbr-chat-tui
 
 cbr-browser: require-cli
 	"$(CLI)" browser --host "$(HOST)" --port "$(PORT)" --model "$(MODEL)"
 
-serve: require-cli
+cbr-serve: require-cli
 	"$(CLI)" serve --host "$(HOST)" --port "$(PORT)" --model "$(MODEL)"
+
+serve: cbr-serve
 
 install-global: install
 	mkdir -p "$(BIN_DIR)"
@@ -131,23 +143,53 @@ uninstall-global:
 	rm -f "$(BIN_DIR)/$(COMMAND)"
 	@printf 'Removed %s\n' "$(BIN_DIR)/$(COMMAND)"
 
-chat-safe-shell: require-cli
+install-cbr-browser: venv
+	"$(VENV_PY)" -m pip install -e ".[serve]"
+	mkdir -p "$(BIN_DIR)"
+	printf '%s\n' '#!/bin/sh' 'exec "$(abspath $(VENV_PY))" -m codebase_rag browser --open "$$@"' > "$(BIN_DIR)/$(BROWSER_COMMAND)"
+	chmod +x "$(BIN_DIR)/$(BROWSER_COMMAND)"
+	@printf 'Installed %s\n' "$(BIN_DIR)/$(BROWSER_COMMAND)"
+	@printf 'Run: %s\n' "$(BROWSER_COMMAND)"
+	@case ":$$PATH:" in \
+		*:"$(BIN_DIR)":*) ;; \
+		*) printf 'Add %s to PATH to run %s from any directory.\n' "$(BIN_DIR)" "$(BROWSER_COMMAND)" ;; \
+	esac
+
+uninstall-cbr-browser:
+	rm -f "$(BIN_DIR)/$(BROWSER_COMMAND)"
+	@printf 'Removed %s\n' "$(BIN_DIR)/$(BROWSER_COMMAND)"
+
+cbr-chat-safe-shell: require-cli
 	"$(CLI)" chat --model "$(MODEL)" --allow-shell --shell-runner "docker:$(SHELL_IMAGE)" --shell-network none --shell-timeout "$(SHELL_TIMEOUT)"
 
-container-build:
+chat-safe-shell: cbr-chat-safe-shell
+
+cbr-container-build:
 	CBR_OLLAMA_PORT="$(CBR_OLLAMA_PORT)" docker compose build
 
-container-up:
+container-build: cbr-container-build
+
+cbr-container-up:
 	CBR_OLLAMA_PORT="$(CBR_OLLAMA_PORT)" docker compose up -d ollama
 
-container-pull-model: container-up
+container-up: cbr-container-up
+
+cbr-container-pull-model: cbr-container-up
 	CBR_OLLAMA_PORT="$(CBR_OLLAMA_PORT)" docker compose exec ollama ollama pull "$(MODEL)"
 
-container-doctor:
+container-pull-model: cbr-container-pull-model
+
+cbr-container-doctor:
 	CBR_PROJECT_ROOT="$(abspath $(ROOT))" CBR_OLLAMA_PORT="$(CBR_OLLAMA_PORT)" docker compose run --rm codebase-rag doctor --root /work --model "$(MODEL)"
 
-container-index:
+container-doctor: cbr-container-doctor
+
+cbr-container-index:
 	CBR_PROJECT_ROOT="$(abspath $(ROOT))" CBR_OLLAMA_PORT="$(CBR_OLLAMA_PORT)" docker compose run --rm codebase-rag index /work --db /data/codebase-rag/db
 
-container-chat:
+cbr-container-chat:
 	CBR_PROJECT_ROOT="$(abspath $(ROOT))" CBR_OLLAMA_PORT="$(CBR_OLLAMA_PORT)" docker compose run --rm -it codebase-rag chat --root /work --db /data/codebase-rag/db --model "$(MODEL)" --read-only
+
+container-index: cbr-container-index
+
+container-chat: cbr-container-chat
