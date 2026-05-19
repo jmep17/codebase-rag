@@ -14,8 +14,7 @@ Local codebase RAG with Ollama. Index your code, ask questions, get answers grou
 | Default `chat` | Localhost only (Ollama daemon at :11434) | On |
 | `--allow-web` | SearXNG (your own host) + `web_fetch` destinations | Off |
 | `--provider anthropic` | api.anthropic.com (chat only; embeddings stay local) | Off |
-| `--allow-shell` (host) | None | Off; commands run on host |
-| `--allow-shell --shell-runner docker:IMAGE` | Only what you allow via `--shell-network` (default `none`) | Off |
+| `--allow-shell` | Only what you allow via `--shell-network` (default `none`) | Off; commands run in Docker |
 | `train` | None; writes local artifacts and can call local Ollama with `--create` | On demand |
 
 Defenses against prompt injection in retrieved content / tool results:
@@ -23,7 +22,7 @@ Defenses against prompt injection in retrieved content / tool results:
 - Retrieved chunks, file contents, web pages, and shell output are wrapped in `<<<UNTRUSTED-...>>>` markers and the system prompt tells the model to treat anything between them as data, not instructions.
 - `--read-only` removes create/write/edit/shell tools from the model's schema entirely.
 - By default, every model-driven `create_project`, `write_file`, or `edit_file` prompts for approval before it executes. Use `--no-confirm-writes` only if you want writes/edits auto-applied.
-- `--web-allow` / `--web-block` cap which hosts `web_fetch` may contact (post-redirect host re-checked).
+- `--web-allow` / `--web-block` cap which hosts `web_fetch` may contact; at least one allow entry is required, every redirect hop is checked before request, and private/loopback/link-local/reserved DNS results are rejected.
 - Every tool call and slash command is recorded in a per-project `audit.log` (`codebase-rag audit` to view).
 
 ## Setup
@@ -128,7 +127,7 @@ Index a codebase:
 codebase-rag index ~/code/my-project
 ```
 
-This walks the directory, chunks each source file, embeds the chunks, and stores them in `~/.codebase-rag/db` by default. Re-running is safe — chunks are upserted by `path:line-range`, so the index updates incrementally.
+This walks the directory, chunks each source file, embeds the chunks, and stores them in `${CODEBASE_RAG_HOME:-~/.codebase-rag}/db` by default. Re-running is safe — chunks are upserted by `path:line-range`, so the index updates incrementally.
 
 If files have been **deleted** or **renamed** in the source tree, `index` leaves stale chunks behind. Run `reindex` instead to wipe and rebuild:
 
@@ -222,9 +221,38 @@ codebase-rag chat
 
 Each indexed project lives in its own ChromaDB collection, keyed by the absolute path you indexed. `chat` (and `search`/`show`) defaults the scope to the current working directory — `cd ~/code/project-a && codebase-rag chat` only retrieves chunks from project-a, never from any other project you've indexed. Use `--root <path>` to talk to a different project's index from somewhere else.
 
+### Isolated local stack with Docker
+
+The bundled Compose setup keeps Ollama model blobs and codebase-rag state in Docker volumes, and mounts the project read-only at `/work` by default. This is useful for work-laptop separation or for testing with a disposable assistant state directory.
+
+```bash
+make container-build
+make container-up
+make container-pull-model MODEL=qwen3:8b
+
+make container-index ROOT=/Users/jorden/code/my-project MODEL=qwen3:8b
+make container-chat ROOT=/Users/jorden/code/my-project MODEL=qwen3:8b
+```
+
+Details:
+
+- Ollama runs in the `cbr-ollama` Docker volume with `OLLAMA_NO_CLOUD=1`.
+- codebase-rag state lives in the `cbr-state` Docker volume at `/data/codebase-rag`.
+- The project mount is read-only for `container-chat`; use the native CLI for write/edit sessions unless you intentionally change the Compose mount.
+- Containerized Ollama is exposed only on host loopback at `127.0.0.1:11435` by default (`CBR_OLLAMA_PORT=...` to change it).
+- Do not mount the Docker socket into this container; that would give the agent broad control over Docker on the host.
+
+For a native Ollama workflow with isolated state, set `CODEBASE_RAG_HOME`:
+
+```bash
+export CODEBASE_RAG_HOME="$HOME/.codebase-rag-work"
+codebase-rag index ~/code/my-project
+codebase-rag chat --read-only --root ~/code/my-project
+```
+
 ## CLI flag reference
 
-Most commands accept either a project root (`--root` / `--for-project`) or database path (`--db`). The default database is `~/.codebase-rag/db`; project-specific metadata such as notes, IDE diagnostics, conversations, web cache, and audit logs lives under `~/.codebase-rag/meta/<project-hash>/`.
+Most commands accept either a project root (`--root` / `--for-project`) or database path (`--db`). The default database is `${CODEBASE_RAG_HOME:-~/.codebase-rag}/db`; project-specific metadata such as notes, IDE diagnostics, conversations, web cache, and audit logs lives under `${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<project-hash>/`.
 
 ### Indexing and retrieval
 
@@ -246,7 +274,7 @@ Most commands accept either a project root (`--root` / `--for-project`) or datab
 
 ### IDE diagnostics
 
-`codebase-rag` can read a local cache of IDE/LSP "Problems" through the `get_diagnostics` tool. The cache lives outside the repo at `~/.codebase-rag/meta/<project-hash>/diagnostics.json`; nothing is written into the project.
+`codebase-rag` can read a local cache of IDE/LSP "Problems" through the `get_diagnostics` tool. The cache lives outside the repo at `${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<project-hash>/diagnostics.json`; nothing is written into the project.
 
 Publish diagnostics from an editor bridge or script:
 
@@ -324,7 +352,7 @@ When `codebase-rag serve` is running, an IDE extension can also `PUT` the same J
 | `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven project creation, writes, and edits; default is on. | `codebase-rag chat --no-confirm-writes` |
 | `--allow-shell` | Enable model-driven `run_shell` and user-driven `:run`; each command prompts before execution. | `codebase-rag chat --allow-shell` |
 | `--shell-timeout SECONDS` | Per-command shell timeout; default 30. | `codebase-rag chat --allow-shell --shell-timeout 90` |
-| `--shell-runner host\|docker:IMAGE` | Run shell commands on the host or in a transient Docker container. | `codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim` |
+| `--shell-runner docker:IMAGE` | Run shell commands in a transient Docker container; default is `docker:python:3.13-slim`. | `codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim` |
 | `--shell-network none\|bridge\|host` | Docker network mode for shell commands; default `none`. | `codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim --shell-network none` |
 | `--allow-web` | Enable SearXNG search and URL fetch tools; requires `SEARXNG_URL`. | `SEARXNG_URL=http://127.0.0.1:8080 codebase-rag chat --allow-web` |
 | `--web-allow HOST_GLOB` | Allow `web_fetch` only for matching hosts; repeatable. | `codebase-rag chat --allow-web --web-allow docs.python.org` |
@@ -366,7 +394,7 @@ By default it serves a small built-in app at the printed `open:` URL. Use `--sta
 | `--read-only` | Default WebSocket chats to read-only tools. | `codebase-rag serve --read-only` |
 | `--confirm-writes`, `--no-confirm-writes` | Toggle approval prompts for model-driven project creation, writes, and edits in WebSocket chats; default is on. | `codebase-rag serve --no-confirm-writes` |
 | `--allow-shell` | Enable shell tools for WebSocket chats. | `codebase-rag serve --allow-shell` |
-| `--shell-runner host\|docker:IMAGE` | Shell execution backend for WebSocket chats. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim` |
+| `--shell-runner docker:IMAGE` | Docker shell execution backend for WebSocket chats. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim` |
 | `--shell-network none\|bridge\|host` | Docker network mode for WebSocket shell commands. | `codebase-rag serve --allow-shell --shell-runner docker:python:3.13-slim --shell-network none` |
 | `--shell-timeout SECONDS` | Per-command shell timeout for WebSocket chats. | `codebase-rag serve --allow-shell --shell-timeout 90` |
 | `--allow-web` | Enable web tools for WebSocket chats; requires `SEARXNG_URL`. | `SEARXNG_URL=http://127.0.0.1:8080 codebase-rag serve --allow-web` |
@@ -388,7 +416,7 @@ codebase-rag notes                                   # print current notes
 codebase-rag notes --clear                           # delete
 ```
 
-Notes live at `~/.codebase-rag/meta/<hash>/notes.md`, keyed by the absolute project path.
+Notes live at `${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<hash>/notes.md`, keyed by the absolute project path.
 
 **Personal assistant training artifacts** — generate a local Ollama `Modelfile`
 plus chat-style JSONL examples from the project's last saved conversation.
@@ -407,7 +435,7 @@ codebase-rag chat --model my-project-coder
 ```
 
 By default the generated files live at
-`~/.codebase-rag/meta/<hash>/assistant_training/`, outside your repository.
+`${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<hash>/assistant_training/`, outside your repository.
 `ollama create` personalizes the model recipe and system prompt; it does not
 fine-tune model weights. The exported `training.jsonl` can be used later with a
 separate local fine-tuning tool if you want weight training.
@@ -427,7 +455,7 @@ codebase-rag remove-reference api-spec               # drop a reference set
 codebase-rag stats --root .
 ```
 
-Local reference directories are indexed directly. URL references are first converted to Markdown and stored outside your repo at `~/.codebase-rag/meta/<project-hash>/references/<label>/`, then indexed from there. References are stored in the project's ChromaDB collection but tagged `kind=reference` with a label. During chat, retrieval pulls from both project code and reference docs; the model sees them in separate blocks:
+Local reference directories are indexed directly. URL references are first converted to Markdown and stored outside your repo at `${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<project-hash>/references/<label>/`, then indexed from there. References are stored in the project's ChromaDB collection but tagged `kind=reference` with a label. During chat, retrieval pulls from both project code and reference docs; the model sees them in separate blocks:
 
 ```
 ## Project code
@@ -453,7 +481,7 @@ codebase-rag chat --resume          # continue this project's last conversation
 :forget                             # clear history + delete saved conversation
 ```
 
-Conversations auto-save per-project at `~/.codebase-rag/meta/<hash>/last_conversation.json` after every turn.
+Conversations auto-save per-project at `${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<hash>/last_conversation.json` after every turn.
 
 ### Pinned files (`:add` / `:drop`)
 
@@ -468,6 +496,42 @@ Force specific files into every turn's context regardless of retrieval:
 ```
 
 Pins persist with the conversation.
+
+### Avoid duplicated code during edits
+
+Small local models are more reliable when they make narrow patches instead of
+regenerating whole files. For existing files, prefer `edit_file`: it replaces
+one unique `old_string`, errors if the match is ambiguous, and treats an
+already-applied replacement as a successful no-op. `write_file` overwrites the
+entire file, so use it mainly for brand-new files or deliberate full rewrites.
+
+Keep write confirmations on while coding:
+
+```bash
+codebase-rag chat --confirm-writes --model qwen2.5-coder:7b
+```
+
+If the model starts duplicating code, reset the conversation and pin the file it
+is editing so the next turn sees the current full contents:
+
+```text
+:reset
+:add path/to/file.py
+```
+
+Prompt it explicitly:
+
+```text
+Modify the existing implementation only. Read the target file first, then use
+edit_file with the smallest unique old_string. Do not use write_file unless
+creating a brand-new file.
+```
+
+You can make that preference persistent project context:
+
+```bash
+codebase-rag notes --set "For code edits: prefer edit_file over write_file. Read the file first, replace one unique region, and avoid full-file rewrites unless creating a new file."
+```
 
 ### Git integration
 
@@ -485,7 +549,7 @@ No auto-commit. The model edits files; you review and commit when you're satisfi
 ### Shell tool
 
 ```bash
-codebase-rag chat --allow-shell                                # host runner (default)
+codebase-rag chat --allow-shell                                # Docker runner, network disabled
 codebase-rag chat --allow-shell --shell-runner docker:python:3.13-slim --shell-network none
 codebase-rag chat --allow-shell --shell-timeout 60
 ```
@@ -500,8 +564,8 @@ make chat-safe-shell SHELL_IMAGE=python:3.13 SHELL_TIMEOUT=60
 
 - **`run_shell` tool** — the model can request a shell command. Always prompts `[y/N/edit]` first.
 - **`:run <cmd>`** — you run a command directly; output is added to history for the next turn.
-- **Sandbox (host):** `cwd` pinned to root, `shell=False`, `shlex.split` parsing (no `$VAR`/pipes/backticks), 30s timeout, output capped at 50KB, env scrubbed (no `ANTHROPIC_API_KEY`, etc.).
-- **Sandbox (docker):** the above + transient container, project root bind-mounted at `/work`, `--network=none` by default, `--read-only` rootfs + 64MB tmpfs, non-root user, 1GB / 1 CPU caps.
+- **Sandbox (docker):** transient container, project root bind-mounted at `/work`, `--network=none` by default, `--read-only` rootfs + 64MB tmpfs, non-root user, 1GB / 1 CPU caps, pids limit, all Linux capabilities dropped, and `no-new-privileges`.
+- The legacy host shell runner is disabled. Commands are parsed with `shlex.split`, confirmed before every run, capped at 30s/50KB output by default, and the Docker client is launched with a scrubbed host environment.
 
 ### Web search & fetch (SearXNG)
 
@@ -514,12 +578,12 @@ codebase-rag chat --allow-web --web-allow 'docs.python.org,*.readthedocs.io,gith
 ```
 
 - **`web_search(query)`** via your own SearXNG — queries never leave your machine.
-- **`web_fetch(url)`** via httpx + trafilatura; content capped at 50KB, cached per project for 24h.
+- **`web_fetch(url)`** via httpx + trafilatura; requires at least one `--web-allow`, content capped at 50KB, cached per project for 24h.
 - `--web-allow HOST_GLOB` / `--web-block HOST_GLOB` are repeatable and restrict what `web_fetch` may contact.
-- Post-redirect host is re-checked so a fetch through an allowed host can't silently redirect to an attacker.
+- Every redirect hop is checked before request, and private/loopback/link-local/multicast/reserved DNS results are rejected.
 - Slash commands `:search <query>` and `:fetch <url>` work too.
 
-`add-reference-url` is stricter than chat-time `web_fetch`: it requires at least one `--web-allow`, allows only `http`/`https`, validates redirects, rejects private/loopback/link-local/multicast/reserved DNS results, caps response and Markdown size, and stores generated Markdown under project metadata rather than in your repo. For stronger containment, run fetch+parse in Docker:
+`add-reference-url` uses the same URL safety policy and stores generated Markdown under project metadata rather than in your repo. For stronger parser containment, run fetch+parse in Docker:
 
 ```bash
 codebase-rag add-reference-url https://docs.python.org/3/tutorial/ \
@@ -564,7 +628,7 @@ codebase-rag chat -v                   # per-inference timing + token rates; ful
 
 ### Audit log
 
-Every tool call and slash command in every session is recorded at `~/.codebase-rag/meta/<hash>/audit.log` (long string args are redacted to length-only). Inspect:
+Every tool call and slash command in every session is recorded at `${CODEBASE_RAG_HOME:-~/.codebase-rag}/meta/<hash>/audit.log` (long string args are redacted to length-only). Inspect:
 
 ```bash
 codebase-rag audit                      # last 50 events for the current project
@@ -617,9 +681,9 @@ The system prompt forbids the model from claiming a write succeeded until it see
 | `create_project` | `project_path`, `description?`, `files?`, `overwrite?` | Prompts by default, then creates a new directory under `--root` with starter files. Returns commands to index and chat with it as its own project; Python scaffolds also return official docs suggestions without fetching them. | not `--read-only` |
 | `write_file` | `path`, `content`                 | Prompts by default, then overwrites the file. Reads it back and reports bytes/lines written. | not `--read-only` |
 | `edit_file`  | `path`, `old_string`, `new_string`| Prompts by default, then replaces exactly one occurrence; errors on missing or ambiguous match. | not `--read-only` |
-| `run_shell`  | `command`                         | Execute a command. Confirmation prompt fires before each run. shlex.split parsing, no shell expansion. Optional Docker runner. | `--allow-shell` |
+| `run_shell`  | `command`                         | Execute a command in Docker. Confirmation prompt fires before each run. shlex.split parsing, no shell expansion. | `--allow-shell` |
 | `web_search` | `query`, `top_k?`                 | Search via your self-hosted SearXNG.                                    | `--allow-web` |
-| `web_fetch`  | `url`                             | Fetch a URL, extract main text via trafilatura, cache 24h.              | `--allow-web` |
+| `web_fetch`  | `url`                             | Fetch an allowlisted public URL, extract main text via trafilatura, cache 24h. | `--allow-web` |
 
 All file paths resolve under `--root`. Anything outside is rejected.
 

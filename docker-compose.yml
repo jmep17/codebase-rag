@@ -1,0 +1,27 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_NO_CLOUD: "1"
+    ports:
+      - "127.0.0.1:${CBR_OLLAMA_PORT:-11435}:11434"
+    volumes:
+      - cbr-ollama:/root/.ollama
+
+  codebase-rag:
+    build: .
+    depends_on:
+      - ollama
+    environment:
+      CODEBASE_RAG_HOME: /data/codebase-rag
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_NO_CLOUD: "1"
+    volumes:
+      - cbr-state:/data/codebase-rag
+      - ${CBR_PROJECT_ROOT:-.}:/work:ro
+    working_dir: /work
+
+volumes:
+  cbr-ollama:
+  cbr-state:
