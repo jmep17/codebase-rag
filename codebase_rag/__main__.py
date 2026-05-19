@@ -16,6 +16,7 @@ from . import chat as chat_mod
 from . import diagnostics as diagnostics_mod
 from . import index as index_mod
 from . import training as training_mod
+from . import url_ingest as url_ingest_mod
 
 DEFAULT_DB = Path.home() / ".codebase-rag" / "db"
 
@@ -53,7 +54,25 @@ def _print_missing_extra(
     )
 
 
+def _run_url_fetch_worker(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="codebase-rag __url-fetch-parse")
+    parser.add_argument("--url", required=True)
+    parser.add_argument("--output-json", type=Path, required=True)
+    parser.add_argument("--web-allow", action="append", default=[], required=True)
+    parser.add_argument("--web-block", action="append", default=[])
+    args = parser.parse_args(argv)
+    return url_ingest_mod.worker_fetch_to_json(
+        args.url,
+        args.output_json,
+        allow_patterns=tuple(args.web_allow),
+        block_patterns=tuple(args.web_block),
+    )
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "__url-fetch-parse":
+        raise SystemExit(_run_url_fetch_worker(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(
         prog="codebase-rag",
         description="Local codebase RAG with Ollama + mistral-nemo.",
@@ -346,6 +365,52 @@ def main() -> None:
         default=[],
         metavar="GLOB",
         help="Glob pattern to exclude inside the reference source. Repeatable.",
+    )
+
+    p_addref_url = subparsers.add_parser(
+        "add-reference-url",
+        help="Fetch one documentation URL, convert it to Markdown, and index it as a reference.",
+    )
+    p_addref_url.add_argument("url", type=str, help="Documentation URL to fetch and index.")
+    p_addref_url.add_argument(
+        "--label",
+        type=str,
+        required=True,
+        help="Label for this reference set.",
+    )
+    p_addref_url.add_argument(
+        "--for-project",
+        type=Path,
+        default=Path.cwd(),
+        help="Project root these references belong to (default: current working directory).",
+    )
+    p_addref_url.add_argument(
+        "--db", type=Path, default=DEFAULT_DB, help=f"Database path (default: {DEFAULT_DB})."
+    )
+    p_addref_url.add_argument(
+        "--web-allow",
+        action="append",
+        default=[],
+        required=True,
+        metavar="HOST_GLOB",
+        help="Allowed URL host glob. Required; repeatable.",
+    )
+    p_addref_url.add_argument(
+        "--web-block",
+        action="append",
+        default=[],
+        metavar="HOST_GLOB",
+        help="Blocked URL host glob. Repeatable and takes precedence over --web-allow.",
+    )
+    p_addref_url.add_argument(
+        "--url-runner",
+        type=str,
+        default="host",
+        metavar="host|docker:IMAGE",
+        help=(
+            "Where to fetch and parse the URL. Use docker:IMAGE for a transient "
+            "container that has codebase-rag[web] installed (default: host)."
+        ),
     )
 
     p_audit = subparsers.add_parser(
@@ -811,6 +876,48 @@ def main() -> None:
             args.db,
             label=label,
             extra_excludes=args.exclude,
+        )
+    elif args.command == "add-reference-url":
+        if not args.for_project.exists():
+            print(f"Project root does not exist: {args.for_project}", file=sys.stderr)
+            sys.exit(1)
+        project_root = args.for_project.resolve()
+        meta_dir = index_mod.project_meta_dir(project_root)
+        work_dir = meta_dir / "tmp" / f"url-fetch-{url_ingest_mod._url_digest(args.url)[:12]}"
+        result = url_ingest_mod.fetch_url_markdown_with_runner(
+            args.url,
+            runner=args.url_runner,
+            work_dir=work_dir,
+            allow_patterns=tuple(args.web_allow),
+            block_patterns=tuple(args.web_block),
+        )
+        if not result.get("ok"):
+            print(f"URL import failed: {result.get('error')}", file=sys.stderr)
+            if result.get("docker_stderr"):
+                print(f"Docker stderr: {result['docker_stderr']}", file=sys.stderr)
+            if args.url_runner.startswith("docker:"):
+                print(
+                    "Hint: the Docker image must include the `codebase-rag` CLI and "
+                    "the web extra dependencies (`httpx` and `trafilatura`).",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+        ref_dir = url_ingest_mod.store_reference_markdown(
+            project_root,
+            label=args.label,
+            result=result,
+            runner=args.url_runner,
+        )
+        print(f"Fetched {result.get('final_url') or args.url}")
+        if result.get("title"):
+            print(f"Title: {result['title']}")
+        print(f"Stored Markdown reference under {ref_dir}")
+        index_mod.add_reference(
+            ref_dir,
+            project_root,
+            args.db,
+            label=args.label,
+            extra_excludes=("manifest.json",),
         )
     elif args.command == "remove-reference":
         if not args.for_project.exists():

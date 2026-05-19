@@ -305,6 +305,8 @@ When `codebase-rag serve` is running, an IDE extension can also `PUT` the same J
 | `add-reference SOURCE` | `--for-project PATH` | Attach references to a project other than the current directory. | `codebase-rag add-reference ~/docs/api --for-project ~/code/app` |
 | `add-reference SOURCE` | `--db PATH` | Store reference chunks in a non-default DB. | `codebase-rag add-reference ~/docs/api --db ~/.cache/cbr/app-db` |
 | `add-reference SOURCE` | `--exclude GLOB`, `-x GLOB` | Skip matching files inside the reference source; repeatable. | `codebase-rag add-reference ~/docs/api -x 'archive/*'` |
+| `add-reference-url URL` | `--label NAME`, `--web-allow HOST_GLOB` | Fetch one docs URL, convert it to Markdown, store it under project metadata, and index it as a reference. | `codebase-rag add-reference-url https://docs.python.org/3/tutorial/ --label python --web-allow docs.python.org` |
+| `add-reference-url URL` | `--url-runner host\|docker:IMAGE` | Fetch/parse on the host or in a transient Docker container with no project repo mount. | `codebase-rag add-reference-url https://docs.python.org/3/tutorial/ --label python --web-allow docs.python.org --url-runner docker:my-cbr-web` |
 | `remove-reference LABEL` | `--for-project PATH` | Remove the label from a project other than the current directory. | `codebase-rag remove-reference api-spec --for-project ~/code/app` |
 | `remove-reference LABEL` | `--db PATH` | Remove reference chunks from a non-default DB. | `codebase-rag remove-reference api-spec --db ~/.cache/cbr/app-db` |
 
@@ -416,13 +418,16 @@ separate local fine-tuning tool if you want weight training.
 cd ~/code/my-project
 codebase-rag add-reference ~/Documents/api-docs --label api-spec
 codebase-rag add-reference ~/Documents/dnd-kit-docs --label dnd-kit
+codebase-rag add-reference-url https://docs.python.org/3/tutorial/ \
+  --label python-tutorial \
+  --web-allow docs.python.org
 codebase-rag remove-reference api-spec               # drop a reference set
 
 # inspect what's loaded for this project
 codebase-rag stats --root .
 ```
 
-References are stored in the project's ChromaDB collection but tagged `kind=reference` with a label. During chat, retrieval pulls from both project code and reference docs; the model sees them in separate blocks:
+Local reference directories are indexed directly. URL references are first converted to Markdown and stored outside your repo at `~/.codebase-rag/meta/<project-hash>/references/<label>/`, then indexed from there. References are stored in the project's ChromaDB collection but tagged `kind=reference` with a label. During chat, retrieval pulls from both project code and reference docs; the model sees them in separate blocks:
 
 ```
 ## Project code
@@ -505,6 +510,17 @@ codebase-rag chat --allow-web --web-allow 'docs.python.org,*.readthedocs.io,gith
 - `--web-allow HOST_GLOB` / `--web-block HOST_GLOB` are repeatable and restrict what `web_fetch` may contact.
 - Post-redirect host is re-checked so a fetch through an allowed host can't silently redirect to an attacker.
 - Slash commands `:search <query>` and `:fetch <url>` work too.
+
+`add-reference-url` is stricter than chat-time `web_fetch`: it requires at least one `--web-allow`, allows only `http`/`https`, validates redirects, rejects private/loopback/link-local/multicast/reserved DNS results, caps response and Markdown size, and stores generated Markdown under project metadata rather than in your repo. For stronger containment, run fetch+parse in Docker:
+
+```bash
+codebase-rag add-reference-url https://docs.python.org/3/tutorial/ \
+  --label python-tutorial \
+  --web-allow docs.python.org \
+  --url-runner docker:my-cbr-web
+```
+
+The Docker image must already have the `codebase-rag` CLI plus the `web` extra installed. The container gets only a temporary metadata workspace mounted, runs as your UID/GID, uses a read-only root filesystem with tmpfs `/tmp`, drops all Linux capabilities, sets `no-new-privileges`, and applies CPU, memory, and PID limits.
 
 ### Architect–coder split
 
