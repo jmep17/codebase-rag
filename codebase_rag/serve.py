@@ -381,6 +381,222 @@ def _serialize_event(
 # ---------------------------------------------------------------------------
 
 
+def _builtin_app_html() -> str:
+    return """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>codebase-rag</title>
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#050807;--panel:#0c1110;--panel2:#121c17;--line:#20382b;
+  --text:#d7f5e2;--muted:#86a995;--dim:#547461;--accent:#4ade80;
+  --warn:#fbbf24;--danger:#f87171;--info:#22d3ee;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:#000;color:var(--text);font:14px/1.5 var(--sans)}
+body{background:linear-gradient(#050807,#020403);padding:18px}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer}
+.shell{max-width:1440px;margin:0 auto;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--bg);box-shadow:0 18px 60px #000}
+.top{height:46px;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid #17261e;background:#080d0b;font-family:var(--mono)}
+.lights{display:flex;gap:7px}.lights span{width:12px;height:12px;border-radius:50%}.r{background:#ff5f57}.y{background:#febc2e}.g{background:#28c840}
+.brand{font-weight:700}.status{margin-left:auto;color:var(--muted);font-size:12px}.status b{color:var(--accent)}
+.grid{display:grid;grid-template-columns:290px minmax(0,1fr) 310px;min-height:calc(100vh - 84px)}
+.side,.right{background:var(--panel);border-right:1px solid #17261e;min-width:0}.right{border-right:0;border-left:1px solid #17261e}
+.head{padding:12px 14px;border-bottom:1px solid #17261e;color:var(--dim);font:11px var(--mono);text-transform:uppercase;letter-spacing:.12em}
+.body{padding:12px;overflow:auto}.projects{display:flex;flex-direction:column;gap:8px}
+.project{width:100%;text-align:left;background:var(--panel2);border:1px solid transparent;border-radius:7px;color:var(--text);padding:10px}
+.project:hover,.project.on{border-color:var(--accent)}.project .path{color:var(--muted);font:11px var(--mono);word-break:break-all;margin-top:3px}.project .meta{color:var(--dim);font:11px var(--mono);margin-top:6px}
+.main{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.chat{flex:1;overflow:auto;padding:22px;min-height:420px}.empty{color:var(--muted);max-width:720px}.empty h1{font:22px var(--mono);color:var(--text);margin:0 0 8px}.empty code{color:var(--accent)}
+.turn{margin:0 0 18px}.who{font:12px var(--mono);color:var(--dim);margin-bottom:5px}.bubble{white-space:pre-wrap;border:1px solid #17261e;background:var(--panel);border-radius:8px;padding:12px 13px}.user .bubble{border-color:#28563a}.assistant .bubble{line-height:1.65}.event{font:12px var(--mono);color:var(--muted);border-left:2px solid var(--info);padding:6px 10px;margin:10px 0 10px 12px;background:rgba(34,211,238,.05)}
+.event.warn{border-color:var(--warn)}.event.error{border-color:var(--danger);color:#ffb4b4}.event.ok{border-color:var(--accent)}
+.confirm{border:1px solid rgba(251,191,36,.45);background:rgba(251,191,36,.06);border-radius:8px;padding:12px;margin:12px 0}.confirm pre{white-space:pre-wrap;color:var(--muted);margin:8px 0;font:12px var(--mono)}
+.composer{border-top:1px solid #17261e;background:var(--panel);padding:12px}.composer form{display:flex;gap:10px;align-items:flex-end}
+textarea{flex:1;resize:vertical;min-height:72px;max-height:220px;background:#050807;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:10px 12px;font-family:var(--mono)}
+textarea:focus,input:focus,select:focus{outline:2px solid rgba(74,222,128,.35);border-color:var(--accent)}
+.btn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:9px 12px;min-height:38px}.btn:hover{border-color:var(--accent)}.btn.primary{background:#14361e;color:var(--accent);border-color:#2f7d4e}.btn.danger{color:var(--danger);border-color:rgba(248,113,113,.35)}
+.stack{display:flex;flex-direction:column;gap:12px}.card{border:1px solid #17261e;background:var(--panel2);border-radius:8px;padding:12px}.card h3{font:12px var(--mono);color:var(--muted);margin:0 0 8px;text-transform:uppercase;letter-spacing:.09em}.kv{display:grid;grid-template-columns:92px 1fr;gap:5px;font:12px var(--mono)}.kv span:nth-child(odd){color:var(--dim)}.kv span:nth-child(even){color:var(--text);min-width:0;overflow-wrap:anywhere}
+.search{display:flex;gap:8px}.search input{min-width:0;flex:1;background:#050807;border:1px solid var(--line);border-radius:7px;color:var(--text);padding:8px 10px}.hits{display:flex;flex-direction:column;gap:8px;margin-top:10px}.hit{border:1px solid #20382b;border-radius:7px;padding:9px;background:#09100d}.hit .file{font:12px var(--mono);color:var(--accent);overflow-wrap:anywhere}.hit .text{color:var(--muted);font:12px var(--mono);max-height:110px;overflow:auto;white-space:pre-wrap;margin-top:5px}
+.tokenBox{display:flex;gap:8px}.tokenBox input{min-width:0;flex:1;background:#050807;border:1px solid var(--line);border-radius:7px;color:var(--text);padding:8px 10px;font-family:var(--mono)}
+.small{font:12px var(--mono);color:var(--dim)}.hidden{display:none}
+@media (max-width:1050px){.grid{grid-template-columns:1fr}.side,.right{border:0;border-bottom:1px solid #17261e}.grid{min-height:0}.chat{min-height:50vh}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+    <div class="brand">codebase-rag</div>
+    <div class="status" id="status">connecting</div>
+  </div>
+  <div class="grid">
+    <aside class="side">
+      <div class="head">Projects</div>
+      <div class="body">
+        <div class="tokenBox hidden" id="tokenBox">
+          <input id="tokenInput" placeholder="paste serve token">
+          <button class="btn" id="saveToken" type="button">Use</button>
+        </div>
+        <p class="small" id="tokenHint"></p>
+        <div class="projects" id="projects"></div>
+      </div>
+    </aside>
+    <main class="main">
+      <div class="chat" id="chat">
+        <div class="empty">
+          <h1>Local codebase chat</h1>
+          <p>This built-in browser app is served by <code>codebase-rag serve</code>. Pick an indexed project, then ask about the code. API calls still require the local bearer token printed in the terminal.</p>
+        </div>
+      </div>
+      <div class="composer">
+        <form id="form">
+          <textarea id="input" placeholder="Ask about this codebase, or type :help"></textarea>
+          <button class="btn primary" type="submit">Send</button>
+        </form>
+      </div>
+    </main>
+    <aside class="right">
+      <div class="head">Context</div>
+      <div class="body stack">
+        <section class="card"><h3>Session</h3><div class="kv" id="sessionMeta"></div></section>
+        <section class="card"><h3>Search</h3><form class="search" id="searchForm"><input id="searchInput" placeholder="semantic search"><button class="btn" type="submit">Go</button></form><div class="hits" id="hits"></div></section>
+      </div>
+    </aside>
+  </div>
+</div>
+<script>
+const qs = new URLSearchParams(location.search);
+let token = qs.get("token") || localStorage.getItem("codebase-rag-token") || "";
+let selectedProject = "";
+let ws = null;
+let activeAssistant = null;
+const el = (id) => document.getElementById(id);
+const chat = el("chat");
+function esc(s){return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;","'":"&#39;"}[c]));}
+function authHeaders(){return token ? {"Authorization":"Bearer " + token} : {};}
+function setStatus(text, ok=false){el("status").innerHTML = ok ? "<b>" + esc(text) + "</b>" : esc(text);}
+function append(kind, who, text){
+  const d=document.createElement("div");d.className="turn " + kind;
+  d.innerHTML="<div class='who'>"+esc(who)+"</div><div class='bubble'>"+esc(text)+"</div>";
+  chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d.querySelector(".bubble");
+}
+function eventLine(text, cls=""){
+  const d=document.createElement("div");d.className="event "+cls;d.textContent=text;
+  chat.appendChild(d);chat.scrollTop=chat.scrollHeight;
+}
+async function api(path, opts={}){
+  const res = await fetch(path, {...opts, headers:{...authHeaders(), ...(opts.headers||{})}});
+  if(res.status===401){showTokenBox("Token required. Open the URL printed by serve or paste the token.");throw new Error("auth required");}
+  if(!res.ok){let msg=res.statusText;try{msg=(await res.json()).error||msg}catch{}throw new Error(msg);}
+  return res.json();
+}
+function showTokenBox(msg){
+  el("tokenBox").classList.remove("hidden");el("tokenHint").textContent=msg||"";
+}
+function saveToken(){
+  token=el("tokenInput").value.trim();if(!token)return;
+  localStorage.setItem("codebase-rag-token", token);
+  const next = new URL(location.href);next.searchParams.set("token", token);history.replaceState(null,"",next);
+  el("tokenBox").classList.add("hidden");load();
+}
+function renderProjects(projects){
+  const box=el("projects");box.innerHTML="";
+  if(!projects.length){box.innerHTML="<p class='small'>No indexed projects found. Run <code>codebase-rag index .</code>, then refresh. Chat will still try the server's default --root.</p>";return;}
+  if(!selectedProject) selectedProject = projects[0].slug;
+  for(const p of projects){
+    const b=document.createElement("button");b.type="button";b.className="project"+(p.slug===selectedProject?" on":"");
+    b.innerHTML="<div>"+esc((p.root||"").split("/").pop()||p.root)+"</div><div class='path'>"+esc(p.root)+"</div><div class='meta'>"+esc(p.project_files||0)+" files · "+esc(p.total_chunks||0)+" chunks</div>";
+    b.onclick=()=>{selectedProject=p.slug;renderProjects(projects);connect();};
+    box.appendChild(b);
+  }
+}
+function setSession(msg){
+  const caps=msg.capabilities||{};
+  el("sessionMeta").innerHTML =
+    "<span>root</span><span>"+esc(msg.root||"")+"</span>"+
+    "<span>model</span><span>"+esc(msg.model||"")+"</span>"+
+    "<span>provider</span><span>"+esc(msg.provider||"")+"</span>"+
+    "<span>tools</span><span>"+(caps.read_only?"read-only":"writes confirm")+"</span>"+
+    "<span>shell</span><span>"+(caps.allow_shell?"enabled":"off")+"</span>"+
+    "<span>web</span><span>"+(caps.allow_web?"enabled":"off")+"</span>";
+}
+function connect(){
+  if(ws) ws.close();
+  if(!token){showTokenBox("Paste the token from the terminal, or open the printed ?token= URL.");return;}
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const url = new URL(proto + "://" + location.host + "/api/chat");
+  url.searchParams.set("token", token);
+  if(selectedProject) url.searchParams.set("project", selectedProject);
+  ws = new WebSocket(url);
+  setStatus("connecting");
+  ws.onopen=()=>setStatus("connected", true);
+  ws.onclose=(e)=>{setStatus("disconnected"); if(e.reason) eventLine(e.reason, "warn");};
+  ws.onerror=()=>eventLine("WebSocket error", "error");
+  ws.onmessage=(ev)=>handleMessage(JSON.parse(ev.data));
+}
+function handleMessage(msg){
+  if(msg.type==="hello"){setSession(msg);eventLine("session ready: "+msg.root, "ok");return;}
+  if(msg.type==="token"){if(!activeAssistant) activeAssistant=append("assistant","assistant","");activeAssistant.textContent += msg.piece;chat.scrollTop=chat.scrollHeight;return;}
+  if(msg.type==="turn_complete"||msg.type==="turn_done"){activeAssistant=null;return;}
+  if(msg.type==="retrieval"){eventLine("retrieved "+((msg.hits||[]).length)+" context chunks");return;}
+  if(msg.type==="tool_call"){eventLine("tool: "+msg.name);return;}
+  if(msg.type==="tool_result"){eventLine("tool result: "+(msg.ok?"ok":"failed"), msg.ok?"ok":"error");return;}
+  if(msg.type==="slash_output"){eventLine((msg.lines||[]).map(l=>l.text).join("\\n") || "slash command complete");return;}
+  if(msg.type==="confirm"){
+    const d=document.createElement("div");d.className="confirm";
+    d.innerHTML="<b>Confirm "+esc(msg.name||"action")+"</b><pre>"+esc(JSON.stringify(msg.preview||msg.args||{}, null, 2))+"</pre><button class='btn primary'>Approve</button> <button class='btn danger'>Decline</button>";
+    const buttons=d.querySelectorAll("button");
+    buttons[0].onclick=()=>{ws.send(JSON.stringify({type:"confirm",approved:true,args:msg.args}));d.remove();};
+    buttons[1].onclick=()=>{ws.send(JSON.stringify({type:"confirm",approved:false}));d.remove();};
+    chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return;
+  }
+  if(msg.type==="slash_confirm_prompt"){
+    if(confirm(msg.prompt)){ws.send(JSON.stringify({type:"slash_confirm_reply",approved:true}));}else{ws.send(JSON.stringify({type:"slash_confirm_reply",approved:false}));}
+    return;
+  }
+  if(msg.type==="error"||msg.type==="warn"){eventLine(msg.message || msg.type, msg.type==="error"?"error":"warn");return;}
+}
+async function load(){
+  try{
+    const health=await fetch("/api/health").then(r=>r.json());
+    setStatus("server v"+health.version, true);
+    const data=await api("/api/projects");
+    renderProjects(data.projects||[]);
+    connect();
+  }catch(e){if(e.message!=="auth required") eventLine(e.message, "error");}
+}
+el("saveToken").onclick=saveToken;
+el("form").onsubmit=(e)=>{
+  e.preventDefault();const text=el("input").value.trim();if(!text||!ws||ws.readyState!==1)return;
+  append("user","you",text);activeAssistant=null;ws.send(JSON.stringify({type:"user_input",text}));el("input").value="";
+};
+el("searchForm").onsubmit=async(e)=>{
+  e.preventDefault();const q=el("searchInput").value.trim();if(!q)return;
+  const hitsBox=el("hits");hitsBox.innerHTML="<p class='small'>searching...</p>";
+  try{
+    const data=await api("/api/search?project="+encodeURIComponent(selectedProject)+"&q="+encodeURIComponent(q)+"&k=5");
+    hitsBox.innerHTML="";
+    for(const h of data.hits||[]){
+      const d=document.createElement("div");d.className="hit";
+      d.innerHTML="<div class='file'>"+esc(h.path||h.file||"hit")+"</div><div class='text'>"+esc(h.text||h.content||"")+"</div>";
+      hitsBox.appendChild(d);
+    }
+    if(!hitsBox.children.length) hitsBox.innerHTML="<p class='small'>No hits.</p>";
+  }catch(err){hitsBox.innerHTML="<p class='small'>"+esc(err.message)+"</p>";}
+};
+if(token){localStorage.setItem("codebase-rag-token", token);}else{showTokenBox("No token in URL. Paste the token from the terminal.");}
+load();
+</script>
+</body>
+</html>"""
+
+
 def create_app(
     *,
     db_path: Path,
@@ -421,20 +637,7 @@ def create_app(
                 # for /api/* calls.
                 return await call_next(request)
             if static_dir is None and path == "/":
-                token_q = request.query_params.get("token", "").encode("utf-8")
-                if token_q and secrets.compare_digest(token_q, expected_token):
-                    return await call_next(request)
-                return JSONResponse(
-                    {
-                        "error": "missing bearer token",
-                        "hint": (
-                            "Open the exact URL printed by `codebase-rag serve`, "
-                            "including ?token=..., or call /api/* with an "
-                            "Authorization: Bearer <token> header."
-                        ),
-                    },
-                    status_code=401,
-                )
+                return await call_next(request)
             auth = request.headers.get("authorization", "")
             if not auth.lower().startswith("bearer "):
                 return JSONResponse({"error": "missing bearer token"}, status_code=401)
@@ -456,27 +659,8 @@ def create_app(
             }
         )
 
-    async def no_static_landing(request):
-        return HTMLResponse(
-            """<!doctype html>
-<meta charset="utf-8">
-<title>codebase-rag serve</title>
-<style>
-body{margin:40px;font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#0f1217;color:#dce7df}
-main{max-width:760px}
-code{background:#1a211d;border:1px solid #304238;border-radius:4px;padding:2px 5px;color:#9be7b0}
-a{color:#9be7b0}
-</style>
-<main>
-<h1>codebase-rag backend is running</h1>
-<p>No browser UI bundle is configured for this server. Start with <code>--static DIR</code>
-to serve a built SPA at this URL.</p>
-<p>The REST and WebSocket API are available under <code>/api/*</code>. API requests must send
-<code>Authorization: Bearer &lt;token&gt;</code>.</p>
-<p><a href="/api/health">Health check</a> is public.</p>
-</main>""",
-            status_code=200,
-        )
+    async def builtin_app(request):
+        return HTMLResponse(_builtin_app_html(), status_code=200)
 
     async def list_projects(request):
         projects = await asyncio.to_thread(_list_projects, db_path)
@@ -1080,7 +1264,7 @@ to serve a built SPA at this URL.</p>
             Mount("/", StaticFiles(directory=str(static_dir), html=True), name="spa"),
         )
     else:
-        routes.insert(0, Route("/", no_static_landing, methods=["GET"]))
+        routes.insert(0, Route("/", builtin_app, methods=["GET"]))
 
     app = Starlette(
         debug=False,
@@ -1130,7 +1314,8 @@ def _print_banner(
     print(f"  provider: {provider}   model: {model}")
     print(f"  skills:   {'auto' if chat_defaults.get('skills_enabled', True) else 'disabled'}")
     print(f"  token:    {truncated}    (file: {token_path}, mode 0600)")
-    print(f"  static:   {static_dir or '(none — REST + WS only)'}")
+    static_label = str(static_dir) if static_dir is not None else "(built-in browser app)"
+    print(f"  static:   {static_label}")
     if not is_loopback:
         print()
         print(
@@ -1143,13 +1328,10 @@ def _print_banner(
         "  ⚠ Anyone with the token can read this codebase. Rotate by restarting (or --reuse-token)."
     )
     print()
+    print(f"  open:    {binding}/?token={token}")
+    print(f"  status:  {binding}/api/health")
     if static_dir is None:
-        print("  browser: no static bundle configured; pass --static DIR to serve the app")
-        print(f"  status:  {binding}/api/health")
-        print(f"  api:     use Authorization: Bearer <token> from {token_path}")
-        print(f"  help:    {binding}/?token={token}")
-    else:
-        print(f"  open: {binding}/?token={token}")
+        print("  note:    using the built-in app; --static DIR can replace it")
     if provider == "anthropic":
         print()
         print("  ⚠ Provider: anthropic — chat content WILL leave your machine (api.anthropic.com).")

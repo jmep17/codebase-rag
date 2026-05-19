@@ -26,7 +26,7 @@ def _print_missing_command(parser: argparse.ArgumentParser) -> None:
         "\nerror: missing command.\n"
         "  Try:             codebase-rag --help\n"
         "  Terminal chat:    codebase-rag chat\n"
-        "  Browser backend:  codebase-rag serve",
+        "  Browser app:      codebase-rag serve",
         file=sys.stderr,
     )
 
@@ -604,7 +604,7 @@ def main() -> None:
 
     p_serve = subparsers.add_parser(
         "serve",
-        help="Start the local HTTP/WebSocket backend for the browser/desktop app.",
+        help="Start the local browser app and HTTP/WebSocket API.",
     )
     p_serve.add_argument(
         "--host",
@@ -642,9 +642,9 @@ def main() -> None:
         default=None,
         metavar="DIR",
         help=(
-            "Serve a built SPA bundle at /. Typically web/dist after `pnpm build`. "
-            "Static assets are anonymously readable; the SPA must include "
-            "?token=… when calling /api/*."
+            "Replace the built-in browser app with a custom built SPA bundle at /. "
+            "Static assets are anonymously readable; the SPA must include ?token=… "
+            "when calling /api/*."
         ),
     )
     p_serve.add_argument(

@@ -344,9 +344,9 @@ When `codebase-rag serve` is running, an IDE extension can also `PUT` the same J
 
 ### Serve
 
-`serve` starts the local HTTP/WebSocket backend. It requires `pip install -e '.[serve]'`.
+`serve` starts the local browser app plus its HTTP/WebSocket API. It requires `pip install -e '.[serve]'`.
 If the editable install already exists and your package index blocks build dependencies, install the runtime pieces directly instead: `pip install starlette uvicorn websockets`.
-Without `--static DIR`, `serve` runs the API only; use `--static web/dist` or another built SPA directory for the browser app.
+By default it serves a small built-in app at the printed `open:` URL. Use `--static web/dist` or another built SPA directory only when you want to replace the built-in app with a custom bundle.
 
 | Flag | What it does | Example |
 |---|---|---|
@@ -354,7 +354,7 @@ Without `--static DIR`, `serve` runs the API only; use `--static web/dist` or an
 | `--port PORT` | Bind port; default `8723` or `CODEBASE_RAG_SERVE_PORT`. | `codebase-rag serve --port 9000` |
 | `--db PATH` | Use a non-default index database. | `codebase-rag serve --db ~/.cache/cbr/app-db` |
 | `--root PATH` | Default project root for browser/WebSocket sessions. | `codebase-rag serve --root ~/code/app` |
-| `--static DIR` | Serve a built SPA bundle at `/`. | `codebase-rag serve --static web/dist` |
+| `--static DIR` | Replace the built-in app with a custom built SPA bundle at `/`. | `codebase-rag serve --static web/dist` |
 | `--reuse-token` | Keep the existing bearer token instead of rotating on start. | `codebase-rag serve --reuse-token` |
 | `--token-file PATH` | Store/read the bearer token at a custom path. | `codebase-rag serve --token-file ~/.cache/cbr/serve.token` |
 | `--quiet` | Suppress uvicorn access logs. | `codebase-rag serve --quiet` |
